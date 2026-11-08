@@ -803,9 +803,7 @@ export function Composer(props: ComposerProps): React.JSX.Element {
         </div>
         <div className={css.genMeta}>
           <span>{summaryParts.length === 0 ? '无额外参数' : summaryParts.join(' · ')}</span>
-          <span className={css.dot}>•</span>
           <span>{props.lastSeconds === undefined ? '尚无记录' : `上次耗时 ${props.lastSeconds}s`}</span>
-          <span className={css.dot}>•</span>
           <span>失败不计费</span>
         </div>
         {props.notConfigured && (

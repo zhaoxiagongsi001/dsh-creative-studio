@@ -113,7 +113,7 @@ const tokenCandidates = [
 const tokensPath = tokenCandidates.find((p) => existsSync(p))
 const tokens = tokensPath ? readFileSync(tokensPath, 'utf8') : ''
 
-const html = `<!doctype html>
+const shell = (inner) => `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -121,17 +121,21 @@ const html = `<!doctype html>
 <style>
 ${tokens}
 html, body { margin: 0; padding: 0; height: 100%; }
-body { background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font-family: var(--dsw-font-family); }
-#root { height: 100%; }
+body { display: flex; flex-direction: column; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font-family: var(--dsw-font-family); }
+#root { flex: 1; min-height: 0; }
 ${moduleCss}
-.preview-note { position: fixed; left: 12px; bottom: 10px; z-index: 9; font-size: 10.5px; color: #c2410c; background: #fff7ed; border: 1px solid #fdba74; border-radius: 6px; padding: 2px 8px; }
+/* 2026-11-08 审查 P3-3：原来左下角 fixed 浮层压住了面板底部一行字，
+ * 让人误判成「内容被裁切」。改成顶部一条独立横条，不遮挡任何面板内容。 */
+.preview-note { flex: none; display: flex; align-items: center; height: 20px; padding: 0 12px; font-size: 10px; line-height: 20px; color: #c2410c; background: #fff7ed; border-bottom: 1px solid #fdba74; }
 </style>
 </head>
 <body>
-<div id="root">${panelHtml}</div>
 <div class="preview-note">离线预览 · ${new Date().toISOString().slice(0, 16).replace('T', ' ')} · design token 取自 DSH 真实主题</div>
+<div id="root">${inner}</div>
 </body>
 </html>`
+
+const html = shell(panelHtml)
 
 const outDir = path.join(root, 'preview')
 mkdirSync(outDir, { recursive: true })
@@ -140,7 +144,7 @@ writeFileSync(outFile, html, 'utf8')
 console.log(`preview written: ${outFile}  (${(html.length / 1024).toFixed(1)} KB)`)
 
 if (imageHtml !== '') {
-  const imagePage = html.replace(/<div id="root">[\s\S]*<\/div>\s*<div class="preview-note"/, `<div id="root">${imageHtml}</div>\n<div class="preview-note"`)
+  const imagePage = shell(imageHtml)
   const imageFile = path.join(outDir, 'panel-image.html')
   writeFileSync(imageFile, imagePage, 'utf8')
   console.log(`preview written: ${imageFile}  (${(imagePage.length / 1024).toFixed(1)} KB)`)

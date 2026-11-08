@@ -19,7 +19,6 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-const PORT = 4793
 
 const failures = []
 function check(name, ok, detail) {
@@ -92,7 +91,13 @@ const server = createServer((req, res) => {
   }
 })
 
-await new Promise((resolve) => server.listen(PORT, '127.0.0.1', resolve))
+/*
+ * 端口交给系统分配（listen 0），不再硬编码 4793。
+ * 起因：2026-11-08 本机 4793 被占用，listen 直接 EACCES 让整套自检挂在第一个
+ * 用例上。自检脚本不该依赖某个具体端口是否空闲。
+ */
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+const PORT = server.address().port
 
 /** 打一条路由，返回 { status, body, text }。 */
 async function hit(method, route, { body, headers } = {}) {

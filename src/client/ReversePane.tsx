@@ -483,6 +483,40 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
   /** 正文（单版）。 */
   const currentText = run.kind === 'done' ? run.text : ''
   const sections = useMemo(() => parseSections(currentText), [currentText])
+
+  /**
+   * 提示词卡片 + 六段导航（2026-11-08 界面改版新增）。
+   *
+   * 六段正文动辄 3000 字，卡片要滚很久才看到第 5、6 段。导航条只做两件事：
+   * 点一下跳到某段、滚动时告诉你在第几段。**不碰正文渲染** —— 解析失败时
+   * `sections` 为空，导航整条不出现，正文照旧走纯文本兜底。
+   */
+  const cardRef = useRef<HTMLDivElement | null>(null)
+  const [activeSection, setActiveSection] = useState(0)
+
+  const jumpToSection = useCallback((index: number) => {
+    const box = cardRef.current
+    if (box === null) return
+    const heading = box.querySelectorAll('h4').item(index)
+    if (heading === null) return
+    const delta = heading.getBoundingClientRect().top - box.getBoundingClientRect().top
+    box.scrollTo({ top: box.scrollTop + delta - 8, behavior: 'smooth' })
+    setActiveSection(index)
+  }, [])
+
+  const syncActiveSection = useCallback(() => {
+    const box = cardRef.current
+    if (box === null) return
+    const headings = box.querySelectorAll('h4')
+    const top = box.getBoundingClientRect().top
+    let index = 0
+    for (let i = 0; i < headings.length; i += 1) {
+      const heading = headings.item(i)
+      if (heading !== null && heading.getBoundingClientRect().top - top <= 32) index = i
+    }
+    setActiveSection(index)
+  }, [])
+
   const selectedLocks = options.locks ?? []
   const selectedCards = options.cards ?? []
   const activeGroup = groups[groupIndex]
@@ -549,10 +583,8 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
           )}
           <div className={styles.metaBar}>
             <span className={styles.k}>{meta.width > 0 ? `${meta.width} × ${meta.height}` : '未选图'}</span>
-            <span className={styles.sep}>|</span>
-            <span className={styles.k}>{meta.aspect}</span>
-            <span className={styles.sep}>|</span>
-            {/* 反推成功后显示图片类型；来源只放进 title（悬停可见），默认行内保持干净 */}
+              <span className={styles.k}>{meta.aspect}</span>
+              {/* 反推成功后显示图片类型；来源只放进 title（悬停可见），默认行内保持干净 */}
             <span
               className={styles.k}
               title={
@@ -694,7 +726,7 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
               </button>
             )}
             {options.clothing === 'B3' && clothingProblem !== undefined && (
-              <span style={{ fontSize: 11, color: 'var(--dsw-alias-state-error-primary)' }}>{clothingProblem}</span>
+              <span className={styles.warnText}>{clothingProblem}</span>
             )}
           </div>
 
@@ -793,7 +825,7 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
               </span>
             )}
             {groups.length === 0 && (
-              <span style={{ fontSize: 11, color: 'var(--dsw-alias-label-caption)' }}>
+              <span className={styles.hintText}>
                 {groupsNote ?? '卡片库加载中…'}
               </span>
             )}
@@ -856,7 +888,7 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
         <div className={styles.promptHead}>
           <span className={styles.label}>提示词</span>
           {run.kind === 'done' && (
-            <span style={{ fontSize: 11, color: 'var(--dsw-alias-label-caption)' }}>
+            <span className={styles.hintText}>
               {DIALECTS.find((item) => item.id === (options.dialect ?? 'gpt'))?.label} 写法
             </span>
           )}
@@ -865,6 +897,26 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
             <button type="button" className={styles.mini} onClick={() => void reverse()}>⟳ 重反推</button>
           )}
         </div>
+
+        {/* 六段导航：只在正文真的解析出结构时出现，解析失败不占位 */}
+        {run.kind === 'done' && sections.length > 0 && (
+          <div className={styles.nav}>
+            {sections.map((section, index) => {
+              const label = section.title.replace(/^#\s*\d+\s*-\s*/, '')
+              return (
+                <button
+                  key={index}
+                  type="button"
+                  className={`${styles.navPill} ${activeSection === index ? styles.navPillOn : ''}`}
+                  title={`跳到第 ${index} 段：${label}`}
+                  onClick={() => jumpToSection(index)}
+                >
+                  {index} {label}
+                </button>
+              )
+            })}
+          </div>
+        )}
 
         {/* 提示词正文：四种态 */}
         {run.kind === 'running' ? (
@@ -887,14 +939,15 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
             {run.hint !== undefined && <div className={styles.errHint}>{run.hint}</div>}
           </div>
         ) : run.kind === 'done' ? (
-          <div className={styles.promptCard}>
+          <div className={styles.promptCard} ref={cardRef} onScroll={syncActiveSection}>
             {sections.length === 0 ? (
               // 模型没按六段输出：原样显示，不假装结构化
               <pre className={styles.promptPlain}>{currentText}</pre>
             ) : sections.map((section, index) => (
               <div key={index}>
                 <h4>
-                  {section.title}
+                  <span className={styles.secNo}>{index}</span>
+                  {section.title.replace(/^#\s*\d+\s*-\s*/, '')}
                   {section.en !== undefined && <span className={styles.en}>{section.en}</span>}
                 </h4>
                 {section.lines.map((line, lineIndex) => (
@@ -935,7 +988,12 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
           </button>
           {run.kind === 'done' && (
             <span className={styles.actMeta}>
-              {currentText.length} 字{run.type !== '' ? ` · ${run.type}` : ''}{run.model === '' ? '' : ` · ${run.provider === '' ? '' : `${run.provider}/`}${run.model}`} · {(run.elapsedMs / 1000).toFixed(1)}s
+              <span className={styles.actNum}>{currentText.length} 字</span>
+              {run.type !== '' && <span className={styles.actTag}>{run.type}</span>}
+              {run.model !== '' && (
+                <span className={styles.actNum}>{run.provider === '' ? run.model : `${run.provider}/${run.model}`}</span>
+              )}
+              <span className={styles.actNum}>{(run.elapsedMs / 1000).toFixed(1)}s</span>
             </span>
           )}
           <span className={styles.actSpacer} />

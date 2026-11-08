@@ -1243,12 +1243,9 @@ export function ImageGenPanel(): React.JSX.Element {
           开始 —— 预览区多出的就是这个页头的高度。
         */}
         <div className={css.leftCol}>
-          <header className={css.head}>
-            <div className={css.headText}>
-              <div className={css.title}>生图</div>
-              <div className={css.sub}>提示词 / 参考图 → 生成 → 面板内预览 · 保存 · 历史</div>
-            </div>
-          </header>
+          {/* 2026-11-08 界面统一：这里原来有一套自己的「生图 / 提示词 → 生成 → …」
+              标题，挂在 studio 顶栏「图像创作 / 提示词 → 成品图」下面，等于一个面板
+              两层标题。审查判为视觉噪音，删除；模式与说明统一由外壳顶栏交代。 */}
 
           <Composer
             prompt={prompt}
