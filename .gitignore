@@ -1,0 +1,15 @@
+# 构建产物：由 scripts/build.mjs 生成，不入库
+lib/
+
+# 预览页与截图：由 scripts/preview.mjs 生成
+preview/
+
+# 实测产物：complexity 探测生成的图片与 JSON
+probe/
+
+# 临时文件
+*.tmp
+*.tmp.*
+.tmp-*
+Thumbs.db
+desktop.ini

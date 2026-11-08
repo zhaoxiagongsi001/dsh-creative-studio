@@ -1,0 +1,103 @@
+/* 面板外壳（标题栏 + 模式切换 + 两模式容器）。 */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font-family: var(--dsw-font-family);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+/* 宿主不可用告警：正常情况下不占空间 */
+.hostWarn {
+  flex: none;
+  padding: 8px 16px;
+  font-size: 12px;
+  line-height: 18px;
+  background: var(--dsw-alias-state-warn-tertiary);
+  color: var(--dsw-alias-state-warn-label);
+  border-bottom: 1px solid var(--dsw-alias-border-l2);
+}
+
+/* 顶栏：标题 + 模式切换 */
+.topBar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px 8px 24px;
+  min-width: 0;
+}
+
+.title {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 24px;
+  white-space: nowrap;
+}
+
+.sub {
+  font-size: 12px;
+  color: var(--dsw-alias-label-tertiary);
+  margin-left: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.spacer { flex: 1; }
+
+.modeSeg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-multi-select);
+  flex: none;
+}
+
+.modeBtn {
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.modeBtn:hover { color: var(--dsw-alias-label-secondary); }
+
+.modeOn {
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 500;
+  box-shadow: 0 1px 2px var(--dsw-alias-bg-mask-2);
+}
+
+/* 图 → 词：左素材 / 右产物 */
+.wordBody {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 400px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+}
+
+/* 词 → 图：直接铺满（生图面板自己是两栏） */
+.imageBody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  min-width: 0;
+}

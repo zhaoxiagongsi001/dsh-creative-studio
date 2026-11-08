@@ -1,0 +1,17 @@
+# dsh-creative-studio bundle patch —— 把本插件作为一行插进 web profile 的 roster。
+#
+# 行 id（`studio`）是承重的，三处必须一致：
+#
+#   1. `sidebar.panellist` 的 **id**（侧栏那一行的 cell key）；
+#   2. `main` 槽位的 **key**（主区那个面板的 cell key）—— 侧栏 catalog 规定
+#      「Each list id addresses the matching main panel」，壳自己把两者对上，
+#      插件不写任何导航代码；
+#   3. 本 patch 的行 id，因此 Loader entry id 是 `include:studio`。
+#
+# 对应代码位置：`src/client/index.tsx` 的 `PANEL_ID`。
+#
+# 顺序：侧栏排列由客户端注册时的 `order` 决定（本插件给 -1，排在「插件」order=0 之前），
+# 这里的顺序只决定加载先后。
+- insert:
+    - id: studio
+      name: dsh-creative-studio
