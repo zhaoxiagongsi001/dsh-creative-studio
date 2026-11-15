@@ -452,6 +452,19 @@ export function Composer(props: ComposerProps): React.JSX.Element {
   const overBudget = budgetLeft <= 0
 
   /**
+   * 预算闸要用的两个 ref。
+   *
+   * `usedChars` 每次渲染都在变，而粘贴监听只挂一次（依赖里刻意不含它）——闭包里
+   * 读到的是挂载那一刻的值。重挂载后 `references` 从 panelStore 恢复，这里若仍按
+   * 旧值算，闸就形同虚设（按「一点没用」放行，一批多张能越过 20 MB 上限）。
+   * `reserved` 记「本批已经开始 prepare、但还没进 references」的估算量，避免同一批
+   * 里 N 张各自都看到同一份剩余额度。
+   */
+  const usedCharsRef = useRef(usedChars)
+  usedCharsRef.current = usedChars
+  const reservedRef = useRef(0)
+
+  /**
    * 参考图槽的状态文案。
    *
    * 分几种而不是两种 —— 「模型还没拉到」和「该模型就是不支持」是完全不同的两件事，
@@ -640,27 +653,6 @@ export function Composer(props: ComposerProps): React.JSX.Element {
   pickFileRef.current = pickFile
 
   /**
-   * 按剩余预算挑出一次能收下的文件（宁少勿多）。
-   *
-   * 光截张数不够：预算按 data URL 字符算，4 张 4 MB 的图合计就超过 20 MB 的字符上限，
-   * 而 `pickFile` 里每张各自看预算都是通过的（它看到的是上一次渲染的 `props.references`）。
-   * 文件选择框与粘贴都一次可能给多张，统一在这里先按实际文件大小过一遍。
-   * 单张转成 data URL 后约为原文件大小的 4/3，按它估。
-   */
-  const fitToBudget = (files: File[], room: number): File[] => {
-    let left = MAX_REFERENCES_TOTAL_CHARS - usedChars
-    const accepted: File[] = []
-    for (const file of files) {
-      if (accepted.length >= room) break
-      const need = Math.ceil((file.size * 4) / 3)
-      if (need > left) break
-      left -= need
-      accepted.push(file)
-    }
-    return accepted
-  }
-
-  /**
    * 粘贴监听只挂一次，回调里读到的 props 会过期，所以把「会变的两样」放进 ref。
    *
    * - `onNotice`：面板传的是内联箭头函数（每次渲染都是新引用）。若写进依赖数组，
@@ -671,6 +663,71 @@ export function Composer(props: ComposerProps): React.JSX.Element {
   noticeRef.current = props.onNotice
   const refCountRef = useRef(props.references.length)
   refCountRef.current = props.references.length
+
+  /**
+   * 按剩余预算挑出一次能收下的文件（宁少勿多）。
+   *
+   * 光截张数不够：预算按 data URL 字符算，4 张 4 MB 的图合计就超过 20 MB 的字符上限，
+   * 而 `pickFile` 里每张各自看预算都是通过的（它看到的是上一次渲染的 `props.references`）。
+   * 文件选择框与粘贴都一次可能给多张，统一在这里先按实际文件大小过一遍。
+   * 单张转成 data URL 后约为原文件大小的 4/3，按它估；估算偏保守（prepareReference
+   * 会下采样），只会少收不会超。
+   *
+   * 预算与张数都从 ref 读最新值（`usedChars` 可能是挂载那一刻的旧值）；
+   * 收下的文件立刻计入 `reservedRef`，同一批的后几张不会重复占用同一份额度。
+   * 遇到单个超大文件用 continue 跳过而不是 break：挡住后面更小的图没有道理。
+   */
+  const fitToBudget = (files: File[], room: number): File[] => {
+    let left = MAX_REFERENCES_TOTAL_CHARS - usedCharsRef.current - reservedRef.current
+    const accepted: File[] = []
+    for (const file of files) {
+      if (accepted.length >= room) break
+      const need = Math.ceil((file.size * 4) / 3)
+      if (need > left) continue
+      left -= need
+      reservedRef.current += need
+      accepted.push(file)
+    }
+    return accepted
+  }
+
+  const fitToBudgetRef = useRef(fitToBudget)
+  fitToBudgetRef.current = fitToBudget
+
+  /**
+   * 一批文件的总入口：先按预算截断，再**串行**交给 `pickFile`。
+   *
+   * 串行是必须的：`pickFile` 里 `prepareReference()` 完成后父组件才把图写进
+   * `references`；并行丢进去时每张读到的都是同一份旧预算。await 之间 React 会
+   * 重渲染、`pickFileRef.current` 随之刷新，下一张看到的就是最新额度。
+   * `reservedRef` 是同一批内的保险，收尾时清零。
+   */
+  const addFiles = async (files: File[]): Promise<void> => {
+    const room = Math.max(0, refLimit - refCountRef.current)
+    if (room === 0) {
+      noticeRef.current?.(`参考图最多 ${refLimit} 张`, 'err')
+      return
+    }
+    const accepted = fitToBudgetRef.current(files, room)
+    if (accepted.length === 0) {
+      noticeRef.current?.(`参考图总预算已满（${formatChars(MAX_REFERENCES_TOTAL_CHARS)}），先移除一张再加`, 'err')
+      return
+    }
+    if (accepted.length < files.length) {
+      noticeRef.current?.(
+        `收到 ${files.length} 张，本次只加了 ${accepted.length} 张（受张数上限 ${refLimit} 张或总预算限制）`,
+        'err',
+      )
+    }
+    try {
+      for (const file of accepted) await pickFileRef.current(file)
+    } finally {
+      reservedRef.current = 0
+    }
+  }
+
+  const addFilesRef = useRef(addFiles)
+  addFilesRef.current = addFiles
 
   /**
    * 参考图支持 Ctrl+V 粘贴（2026-11-15，对齐反推工作区的选图入口）。
@@ -727,23 +784,9 @@ export function Composer(props: ComposerProps): React.JSX.Element {
         noticeRef.current?.(`参考图总预算已满（${formatChars(MAX_REFERENCES_TOTAL_CHARS)}），先移除一张再粘贴`, 'err')
         return
       }
-      const room = Math.max(0, refLimit - refCountRef.current)
-      if (room === 0) {
-        noticeRef.current?.(`参考图最多 ${refLimit} 张`, 'err')
-        return
-      }
-      // 一次只收放得下的张数：不让「每张各自看上限都通过、加起来超限」发生。
-      const accepted = fitToBudget(files, room)
-      if (accepted.length < files.length) {
-        noticeRef.current?.(
-          `剪贴板里有 ${files.length} 张图，本次只加了 ${accepted.length} 张（受张数上限 ${refLimit} 张或总预算限制）`,
-          'err',
-        )
-      }
-      if (accepted.length === 0) {
-        noticeRef.current?.(`参考图总预算已满（${formatChars(MAX_REFERENCES_TOTAL_CHARS)}），先移除一张再粘贴`, 'err')
-      }
-      for (const file of accepted) void pickFileRef.current(file)
+      // 张数、预算、串行入队都在 addFiles 里统一处理（与文件选择框同一条路）。
+      // 用 ref 取最新那版：这个监听的依赖里没有 addFiles，闭包会过期。
+      void addFilesRef.current(files)
     }
     // 捕获阶段：抢在宿主的聊天输入框处理之前接住图片粘贴。
     window.addEventListener('paste', onPaste, true)
@@ -842,15 +885,8 @@ export function Composer(props: ComposerProps): React.JSX.Element {
             onChange={(event) => {
               const files = Array.from(event.target.files ?? [])
               event.target.value = ''
-              // 与粘贴同一条预算闸：一次选多张时先按实际大小截断。
-              const accepted = fitToBudget(files, Math.max(0, refLimit - props.references.length))
-              for (const file of accepted) void pickFile(file)
-              if (accepted.length < files.length) {
-                props.onNotice?.(
-                  `选了 ${files.length} 张，本次只加了 ${accepted.length} 张（受张数上限 ${refLimit} 张或总预算限制）`,
-                  'err',
-                )
-              }
+              // 与粘贴同一条路：按实际文件大小截断 + 串行入队。
+              void addFilesRef.current(files)
             }}
           />
         </div>

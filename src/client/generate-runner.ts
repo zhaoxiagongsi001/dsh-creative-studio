@@ -115,12 +115,27 @@ function emit(next: RunState): void {
   }
 }
 
-/** 异常 → 面板能直接展示的 message / detail。 */
-function failureOf(error: unknown): { message: string; detail: string } {
-  if (error instanceof GenerateError) return { message: error.message, detail: error.detail }
+/**
+ * 异常 → 面板能直接展示的 message / detail / 计费口径。
+ *
+ * `billing` 从 `GenerateError` 透传：超时、上游 5xx、链路中断这些「请求已经发出」
+ * 的失败，上游可能已计费，面板据此换掉「本次未计费」那句。没有标记的（没选模型、
+ * 提示词为空这类前置校验）确实没发出去，保留原来的说法。
+ */
+function failureOf(error: unknown): { message: string; detail: string; billing?: 'unknown' } {
+  if (error instanceof GenerateError) {
+    return {
+      message: error.message,
+      detail: error.detail,
+      ...(error.billing === 'unknown' ? { billing: 'unknown' as const } : {}),
+    }
+  }
   return {
     message: '生成失败',
     detail: error instanceof Error ? error.message : String(error),
+    // 拿到一个连 `GenerateError` 都不是的异常时，请求到底发没发出去无从判断 ——
+    // 按「可能已计费」处理，宁可多说一句也不要给错的账单承诺。
+    billing: 'unknown',
   }
 }
 

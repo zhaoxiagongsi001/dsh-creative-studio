@@ -347,10 +347,19 @@ export class GenerateError extends Error {
   /** 提供商返回的原始报错，原样展示给用户（如 OpenRouter 的 402 文案）。 */
   readonly detail: string
 
-  constructor(message: string, detail: string) {
+  /**
+   * 计费口径存疑时标 `'unknown'`。
+   *
+   * 超时 / 上游 5xx / 链路中断都属于「请求已经发出去，但没拿到结果」——上游可能
+   * 已经出图并扣费。明确的前置校验失败（没选模型、提示词空）才是确定未计费。
+   */
+  readonly billing?: 'unknown'
+
+  constructor(message: string, detail: string, billing?: 'unknown') {
     super(message)
     this.name = 'GenerateError'
     this.detail = detail
+    this.billing = billing
   }
 }
 
