@@ -243,6 +243,31 @@
   margin-left: auto;
 }
 
+/*
+ * 字段标题行里的小动作（2026-11-15：提示词标题旁的「清空」）。
+ *
+ * 用纯文字按钮而不是 btnSm：标题行只有 ~18px 高，24px 的按钮会把整行撑高、
+ * 把下方的输入框往下推；这里只借文字色与下划线表达可点。
+ */
+.labelAction {
+  flex: none;
+  height: 18px;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.labelAction:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+  text-decoration: underline;
+}
+
+.labelAction:disabled { opacity: 0.45; cursor: default; }
+
 .promptWrap {
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: var(--dsw-radius-sm);
@@ -483,6 +508,20 @@
   flex-direction: column;
   gap: 8px;
   margin-top: auto;
+}
+
+/*
+ * 生成入口块：按钮 + 本次参数摘要 + 两条前置提示。
+ *
+ * 2026-11-15 老板要求把「生成」从最底部挪到参考图下面（参数区之前）——
+ * 参数行数由模型声明决定，长的时候按钮会被顶到看不见的位置，得滚到底才点得到。
+ * 这里只挪按钮与它的说明，模型行（切模型 / 连接配置）仍留在最底部。
+ */
+.generateBar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
 }
 
 .genRow { display: flex; gap: 8px; }

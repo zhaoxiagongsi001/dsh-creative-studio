@@ -215,6 +215,28 @@ checkContains(imagePane, '参考图', '生图面板：参考图槽')
 checkContains(imagePane, 'Ctrl+V 粘贴', '生图面板：参考图区提示支持 Ctrl+V 粘贴')
 checkContains(imagePane, '历史记录', '生图面板：历史条')
 checkContains(imagePane, '连接配置', '生图面板：连接配置入口')
+// 2026-11-15 老板要求：生成按钮从最底部上移到参考图下面（参数区之前），
+// 并在提示词标题旁加「清空」。SSR 不跑交互，但位置与存在性都能靠首帧 HTML 断言：
+// 「生成」按钮必须出现在「参数」标题之前，否则说明又滑回底部了。
+// 注意：不能只断言「清空」两个字 —— ResultStage 历史条也有一个「清空」按钮，
+// 那样断言恒真。按 title 文案断言，才能钉住提示词标题旁这一个。
+checkContains(imagePane, '清空提示词', '生图面板：提示词旁有「清空」按钮')
+// 首帧草稿为空，「清空」应当是不可点的（disabled 属性必须落在它自己的 <button> 上）。
+const clearAt = imagePane.indexOf('清空提示词')
+const clearBtnAt = clearAt > 0 ? imagePane.lastIndexOf('<button', clearAt) : -1
+const clearBtnTag = clearBtnAt >= 0 ? imagePane.slice(clearBtnAt, clearAt) : ''
+check(
+  '生图面板：空提示词时「清空」按钮为禁用态',
+  clearBtnTag.includes('disabled'),
+  clearBtnTag.slice(0, 120) || '（找不到清空按钮）',
+)
+const genAt = imagePane.indexOf('btnPrimary')
+const paramsAt = imagePane.indexOf('>参数<')
+check(
+  '生图面板：生成按钮排在参数区之前（老板 2026-11-15 要求上移）',
+  genAt > 0 && paramsAt > 0 && genAt < paramsAt,
+  `生成按钮位置 ${genAt} / 参数区 ${paramsAt}`,
+)
 
 // 反推工作区单独渲染（给它一个回调，确认 props 契约成立）
 const reversePane = render(h(clientExports.ReversePane, { onUsePrompt: () => {} }), 'ReversePane')

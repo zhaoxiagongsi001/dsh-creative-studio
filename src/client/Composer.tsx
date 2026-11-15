@@ -804,6 +804,19 @@ export function Composer(props: ComposerProps): React.JSX.Element {
       <div className={css.field}>
         <div className={css.fieldLabel}>
           提示词
+          <button
+            className={css.labelAction}
+            type="button"
+            disabled={props.optimizing || props.prompt === ''}
+            title="清空提示词（只清这一格，参考图与参数不动）"
+            onClick={() => {
+              props.onPromptChange('')
+              // 清空不可撤销（草稿也会跟着空），给一句回执，免得以为没点中。
+              props.onNotice?.('提示词已清空', 'ok')
+            }}
+          >
+            清空
+          </button>
           <span className={css.hint}>Ctrl/⌘ + Enter 生成</span>
         </div>
         <div className={css.promptWrap}>
@@ -898,6 +911,51 @@ export function Composer(props: ComposerProps): React.JSX.Element {
         </div>
       </div>
 
+      {/*
+       * 生成入口（2026-11-15 老板要求上移）：原来在最底部，参数行一多就得滚到底
+       * 才点得到。现在紧跟参考图之后——「提示词 + 参考图 + 生成」是一条动作链，
+       * 参数只是修饰。模型行（切模型 / 连接配置）仍留在最底部。
+       */}
+      <div className={css.generateBar}>
+        <div className={css.genRow}>
+          {props.running
+            ? (
+              <button className={`${css.btn} ${css.btnLg}`} type="button" onClick={props.onCancel}>
+                <StopIcon />
+                取消
+              </button>
+            )
+            : (
+              <button
+                className={`${css.btn} ${css.btnPrimary} ${css.btnLg}`}
+                type="button"
+                disabled={props.notConfigured || props.prompt.trim() === '' || missingRequired}
+                onClick={props.onGenerate}
+              >
+                <SparkIcon />
+                生成
+              </button>
+            )}
+        </div>
+        <div className={css.genMeta}>
+          <span>{summaryParts.length === 0 ? '无额外参数' : summaryParts.join(' · ')}</span>
+          <span>{props.lastSeconds === undefined ? '尚无记录' : `上次耗时 ${props.lastSeconds}s`}</span>
+          <span>失败不计费</span>
+        </div>
+        {props.notConfigured && (
+          <div className={css.genMeta}>
+            <CheckIcon size={12} />
+            配好生图服务后即可生成
+          </div>
+        )}
+        {missingRequired && (
+          <div className={css.genMeta}>
+            <WarnIcon size={12} />
+            该模型是改图专用：至少要有 {model?.references?.min ?? 1} 张参考图才能生成
+          </div>
+        )}
+      </div>
+
       <div className={css.field}>
         <div className={css.fieldLabel}>
           参数
@@ -957,43 +1015,6 @@ export function Composer(props: ComposerProps): React.JSX.Element {
             连接配置
           </button>
         </div>
-        <div className={css.genRow}>
-          {props.running
-            ? (
-              <button className={`${css.btn} ${css.btnLg}`} type="button" onClick={props.onCancel}>
-                <StopIcon />
-                取消
-              </button>
-            )
-            : (
-              <button
-                className={`${css.btn} ${css.btnPrimary} ${css.btnLg}`}
-                type="button"
-                disabled={props.notConfigured || props.prompt.trim() === '' || missingRequired}
-                onClick={props.onGenerate}
-              >
-                <SparkIcon />
-                生成
-              </button>
-            )}
-        </div>
-        <div className={css.genMeta}>
-          <span>{summaryParts.length === 0 ? '无额外参数' : summaryParts.join(' · ')}</span>
-          <span>{props.lastSeconds === undefined ? '尚无记录' : `上次耗时 ${props.lastSeconds}s`}</span>
-          <span>失败不计费</span>
-        </div>
-        {props.notConfigured && (
-          <div className={css.genMeta}>
-            <CheckIcon size={12} />
-            配好生图服务后即可生成
-          </div>
-        )}
-        {missingRequired && (
-          <div className={css.genMeta}>
-            <WarnIcon size={12} />
-            该模型是改图专用：至少要有 {model?.references?.min ?? 1} 张参考图才能生成
-          </div>
-        )}
       </div>
     </section>
   )
