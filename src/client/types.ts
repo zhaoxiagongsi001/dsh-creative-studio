@@ -537,8 +537,6 @@ export interface ReverseOptions {
   redraw?: 'D1' | 'D2' | 'D3'
   /** 锁脸强度：短 / 中 / 强。 */
   lockStrength?: 'short' | 'medium' | 'strong'
-  /** 生图阶段是否会同时上传原图（决定提示词里能否出现「参考图 2」）。 */
-  keepSource?: boolean
   /** 年龄定调（默认「成年」）。 */
   ageText?: string
   /** 锁定的维度名，如 `['构图','光线']`。 */

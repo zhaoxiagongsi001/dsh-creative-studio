@@ -80,12 +80,11 @@ const b1 = build({ person: 'A1', clothing: 'B1' })
 contains(b1, '款式、领型、袖型、下摆长度、面料与图案完全按原图', 'B1：保留原图原文')
 
 const b2Visible = build({ person: 'A1', clothing: 'B2', clothingVisible: true })
-contains(b2Visible, '款式、面料、图案与配色取自参考图（即本图）', 'B2（未带原图）：服装取自本图')
-check('B2（未带原图）不出现「参考图 2」', !b2Visible.includes('参考图 2'), '未带原图时不该提参考图 2')
+contains(b2Visible, '款式、面料、图案与配色取自参考图（即本图）', 'B2：服装取自参考图（即本图）')
 
-const b2WithSource = build({ person: 'A1', clothing: 'B2', clothingVisible: true, keepSource: true })
-contains(b2WithSource, '取自参考图 2', 'B2（带原图）：服装取自参考图 2')
-
+// 2026-11-08 老板拍板：「生图时带原图」开关删除，生图阶段不再有第二张图。
+// 因此**任何档位**的输出里都不许再出现「参考图 2」——这是删除该功能后唯一的硬约束，
+// 漏一处就等于让模型去找一张不存在的图。
 const b2Unknown = build({ person: 'A1', clothing: 'B2', clothingVisible: false })
 contains(b2Unknown, '用户未确认目标图中能看清服装，按 B1 口径处理', 'B2 无前提确认：自动降级 B1')
 
@@ -99,8 +98,8 @@ contains(b3Empty, '留出明确占位并标注', 'B3 空内容：留占位而不
 
 const c1 = build({ person: 'A2', pose: 'C1' })
 contains(c1, '姿态：姿态、重心与四肢角度完全按原图', 'C1：保持原图')
-const c2 = build({ person: 'A3', pose: 'C2', keepSource: true })
-contains(c2, '取自参考图 2', 'C2 带原图：姿态取自参考图 2')
+const c2 = build({ person: 'A3', pose: 'C2' })
+contains(c2, '取自参考图（即本图）', 'C2：姿态取自参考图（即本图）')
 const c3 = build({ person: 'A3', pose: 'C3', poseText: '重心落左脚，躯干侧 45°' })
 contains(c3, '姿态：重心落左脚，躯干侧 45°', 'C3：自填内容进指令')
 const poseHidden = build({ person: 'A1', pose: 'C3', poseText: '不该出现' })
@@ -196,6 +195,23 @@ const dialectAt = full.indexOf('【方言 · Qwen Image】')
 check('NSFW 在方言之前（先降档再定文体）', nsfwAt < dialectAt, `${nsfwAt} < ${dialectAt}`)
 const personAt = full.indexOf('【换人档位 · A3】')
 check('换人骨架在 NSFW 之前（先锁脸再降档会固定措辞，规范禁止）', personAt < nsfwAt, `${personAt} < ${nsfwAt}`)
+
+// ============================================================ 「参考图 2」必须绝迹
+
+// 2026-11-08 老板拍板：图生文的参考图不再带进文生图，同时删掉「生图时带原图」开关。
+// 生图阶段从此只有一张参考图（他自己贴的目标人脸图），提示词里出现「参考图 2」
+// 就是让模型去找一张不存在的图。把档位组合穷举一遍，任何一组都不许出现这个词。
+const combos = []
+for (const person of ['none', 'A1', 'A2', 'A3'])
+  for (const clothing of ['B1', 'B2', 'B3'])
+    for (const pose of ['C1', 'C2', 'C3'])
+      for (const redraw of ['D1', 'D2', 'D3'])
+        for (const nsfw of ['', 'L1', 'L2', 'L3'])
+          for (const dialect of ['gpt', 'gemini', 'qwen'])
+            combos.push({ person, clothing, pose, redraw, nsfw, dialect, clothingVisible: true, clothingText: '米白细针织圆领', poseText: '重心落左脚' })
+
+const leaking = combos.filter((options) => build(options).includes('参考图 2'))
+check(`全组合（${combos.length} 组）都不出现「参考图 2」`, leaking.length === 0, `${leaking.length} 组泄漏，例：${JSON.stringify(leaking[0])}`)
 
 // ============================================================ 汇总
 

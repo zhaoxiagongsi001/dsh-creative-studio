@@ -560,6 +560,17 @@ function emitHostBundle(entryId) {
     'parseReverseOutput', 'inferType', 'matchCards',
     // 规则拼装（纯函数）：给 rules-check 断言每种档位组合都拼出了规范要求的原文句子。
     'instructionsOf',
+    // 反推状态的本地持久化（localStorage）收敛函数与键名：给 persist-check 断言
+    // 「手改过 / 旧版本写脏 / 超大的存档一律被收敛成能用的值」，以及键名不许悄悄改
+    // —— 改键名等于所有老存档作废，必须是一条会引起注意的改动。
+    'coerceReverseOptions', 'coerceReverseSnapshot', 'coerceStoredImage', 'coerceStudioMode', 'defaultReverseOptions',
+    'REVERSE_STATE_KEY', 'REVERSE_IMAGE_KEY', 'STUDIO_MODE_KEY', 'REVERSE_SNAPSHOT_VERSION',
+    // 存取封装本身：persist-check 用一个 localStorage stub 跑完整往返（写坏 JSON、
+    // 老版本存档、存储被禁用三种现场都要在 node 里复现一遍）。
+    'loadReverseSnapshot', 'saveReverseSnapshot', 'loadReverseImage', 'saveReverseImage', 'loadStudioMode', 'saveStudioMode',
+    // 运行态判定与「只改一部分」的合并写：2026-11-08 修「切走即取消」时新增，
+    // persist-check 要断言中断/失败/成功三态的优先级，以及两个写者不会互相抹字段。
+    'resolveBootRun', 'loadReverseBootRun', 'patchReverseSnapshot', 'emptyReverseSnapshot', 'MAX_INTERRUPTED_MS',
   ]
   const present = publicNames.filter(name => exported.has(name))
 

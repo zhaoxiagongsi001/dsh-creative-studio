@@ -46,6 +46,7 @@ import { handleCards, handleReverse, handleActiveModel, routeOf, activeModelOf, 
 import { parseReverseOutput } from './reverse/protocol.ts'
 import { inferType, matchCards } from './reverse/infer.ts'
 import { instructionsOf } from './reverse/rules.ts'
+import { coerceReverseOptions, coerceReverseSnapshot, coerceStoredImage, coerceStudioMode, defaultReverseOptions, REVERSE_IMAGE_KEY, REVERSE_SNAPSHOT_VERSION, REVERSE_STATE_KEY, STUDIO_MODE_KEY } from './reverse/persist.ts'
 
 /** 插件名。Cordis 用它做日志与去重标识。 */
 export const name = 'dsh-creative-studio'
@@ -1291,3 +1292,6 @@ export function apply(ctx: HostContextLike): void {
  * 另一个东西」的部分（逗号、等号、非 ASCII 三个坑），所以它必须能被离线断言。
  */
 export { explorerTarget, routeOf, activeModelOf, decodeDataUrl, parseReverseOutput, instructionsOf, inferType, matchCards }
+// 反推状态的本地持久化（纯函数，不碰 DOM）：`scripts/persist-check.mjs` 要在 node 里
+// 断言「手改过 / 旧版本写脏的存档不会把面板搞崩」，所以从这里导出。
+export { coerceReverseOptions, coerceReverseSnapshot, coerceStoredImage, coerceStudioMode, defaultReverseOptions, REVERSE_IMAGE_KEY, REVERSE_SNAPSHOT_VERSION, REVERSE_STATE_KEY, STUDIO_MODE_KEY }

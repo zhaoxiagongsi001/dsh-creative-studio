@@ -10,9 +10,29 @@
  *   · 失败态给模型原文 + 可操作建议（超时/拒绝/未配置），不再只显示一行红字；
  *   · 反推中显示骨架屏与已用时，可取消。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import styles from './reverse.module.css'
 import { createHttpBackend } from './api.ts'
+import {
+  cancelReverse,
+  clearRun,
+  consumePendingCards,
+  pendingCards,
+  runnerState,
+  startReverse,
+  subscribeRunner,
+  type RunState,
+} from './reverse-runner.ts'
+import {
+  DEFAULT_LOCKS,
+  LOCK_DIMENSIONS,
+  MAX_IMAGE_CHARS,
+  MAX_IMAGE_SOFT_CHARS,
+  loadReverseSnapshot,
+  patchReverseSnapshot,
+  saveReverseImage,
+  type LoadedReverse,
+} from '../reverse/persist.ts'
 import type { ActiveModelResult, Backend, ReverseCard, ReverseCardGroup, ReverseOptions } from './types.ts'
 
 /** 后端单例（整个面板共用一份，避免每次渲染重建）。 */
@@ -23,10 +43,13 @@ const MAX_EDGE = 1536
 /** JPEG 质量。 */
 const JPEG_QUALITY = 0.85
 
-/** 六个维度（顺序即界面顺序，对应 `person-replace-spec.md` 的锁定项）。 */
-const LOCK_DIMENSIONS = ['构图', '光线', '服装', '姿态', '背景', '色调'] as const
-/** 默认勾选的锁定维度（与旧插件一致）。 */
-const DEFAULT_LOCKS = ['构图', '光线', '姿态', '色调']
+/**
+ * 六个锁定维度与默认勾选清单已移到 `src/reverse/persist.ts`。
+ *
+ * 为什么搬走：持久化层也要用同一份清单去收敛「手改过的 locks 数组」，
+ * 两处各写一份迟早漂移（表现为「存档里的维度名不在界面上，勾不出也取消不了」）。
+ * 这里保留 re-export，原来的引用方不用改。
+ */
 
 /** 三种输出方言。 */
 const DIALECTS = [
@@ -95,29 +118,7 @@ function clothingIssue(text: string): string | undefined {
   return undefined
 }
 
-/** 运行态。 */
-type RunState =
-  | { kind: 'idle' }
-  | { kind: 'running'; startedAt: number }
-  | {
-      kind: 'done'
-      text: string
-      /** 图片类型（可能来自模型，也可能是本地推断）。 */
-      type: string
-      /** 类型来源：界面据此标「本地推断」。 */
-      typeSource: 'model' | 'inferred' | 'none'
-      /** 卡片推荐的来源。 */
-      cardsSource: 'model' | 'inferred' | 'none'
-      /** 实际使用的 provider（如 `workbuddy`）。 */
-      provider: string
-      /** 实际使用的聊天模型（如 `hy4free`）。 */
-      model: string
-      /** 路由来源：`request` / `agentDefaultModel`。 */
-      routeSource: string
-      elapsedMs: number
-      warnings: string[]
-    }
-  | { kind: 'error'; title: string; detail?: string; hint?: string }
+/** 运行态类型搬到了执行体（`./reverse-runner.ts`）：状态不再只属于这一次挂载。 */
 
 /** 图片元信息（判定行的数据源）。 */
 interface ImageMeta {
@@ -185,6 +186,36 @@ async function shrink(dataUrl: string): Promise<string> {
   })
 }
 
+/**
+ * 存进 localStorage 前的二次压缩：长边 1024、JPEG 0.78。
+ *
+ * 只作用于「记住这张图」，不影响本次反推实际用的图（那是 `shrink()` 到 1536 的版本）。
+ * 恢复后如果直接点「重反推」，用的是这张 1024 的副本 —— 分辨率仍够模型看清构图与光影。
+ * @param dataUrl - 原始 data URL。
+ * @returns 压缩后的 data URL；画布不可用时原样返回（调用方会按长度决定存不存）。
+ */
+async function recompressForStorage(dataUrl: string): Promise<string> {
+  const size = await imageSize(dataUrl)
+  if (size.width <= 0 || size.height <= 0) return dataUrl
+  const scale = Math.min(1, 1024 / Math.max(size.width, size.height))
+  const targetWidth = Math.max(1, Math.round(size.width * scale))
+  const targetHeight = Math.max(1, Math.round(size.height * scale))
+  return new Promise((resolve) => {
+    const image = new Image()
+    image.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = targetWidth
+      canvas.height = targetHeight
+      const context = canvas.getContext('2d')
+      if (context === null) { resolve(dataUrl); return }
+      context.drawImage(image, 0, 0, targetWidth, targetHeight)
+      resolve(canvas.toDataURL('image/jpeg', 0.78))
+    }
+    image.onerror = () => resolve(dataUrl)
+    image.src = dataUrl
+  })
+}
+
 /** 六段正文的解析结果。 */
 interface PromptSection {
   title: string
@@ -232,30 +263,35 @@ function renderInline(text: string): React.ReactNode {
 
 /** 反推工作区。 */
 export interface ReversePaneProps {
-  /** 「用这段去生图」：把提示词与参考图交给外壳切模式。 */
-  onUsePrompt: (text: string, image: string) => void
+  /** 「用这段去生图」：只把提示词交给外壳切模式（源图不带过去，老板 2026-11-08 拍板）。 */
+  onUsePrompt: (text: string) => void
 }
 
 export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Element {
-  const [image, setImage] = useState('')
-  const [meta, setMeta] = useState<ImageMeta>({ width: 0, height: 0, aspect: '—' })
-  const [options, setOptions] = useState<ReverseOptions>({
-    // 默认不换人：旧插件的默认是「全不勾」，换人属于强意图，不该默认打开。
-    person: 'none',
-    clothing: 'B1',
-    pose: 'C1',
-    redraw: 'D2',
-    lockStrength: 'medium',
-    keepSource: false,
-    ageText: '',
-    locks: [...DEFAULT_LOCKS],
-    cards: [],
-    nsfw: '',
-    dialect: 'gpt',
-    extra: '',
-  })
-  const [run, setRun] = useState<RunState>({ kind: 'idle' })
-  const [elapsed, setElapsed] = useState(0)
+  /**
+   * 挂载时从 localStorage 恢复一次。
+   *
+   * 老板 2026-11-08 报的现象：切到别的会话再切回来，刚才那张图和六段正文全没了。
+   * 根因是主区面板在切会话时被卸载，而这里的图 / 正文 / 参数只活在 `useState` 里。
+   * 用 ref 缓存第一次读到的结果：后续渲染不再重复读几百 KB 的图。
+   */
+  const bootRef = useRef<LoadedReverse | undefined>(undefined)
+  if (bootRef.current === undefined) bootRef.current = loadReverseSnapshot()
+  const boot = bootRef.current
+
+  const [image, setImage] = useState(boot.image)
+  const [meta, setMeta] = useState<ImageMeta>(
+    boot.meta === null ? { width: 0, height: 0, aspect: '—' } : boot.meta,
+  )
+  // 默认参数集中在持久化层：读不到存档时也要用同一份，避免两处各写一套。
+  const [options, setOptions] = useState<ReverseOptions>(boot.options)
+  /**
+   * 运行态来自模块作用域的执行体（`./reverse-runner.ts`）。
+   *
+   * 这么做是为了让「切走」不再等于「取消」：请求挂在执行体上，组件卸载只是退订，
+   * 跑完照样落盘；重新挂载时这里立刻拿到 running（带真实已用秒数）或 done。
+   */
+  const run: RunState = useSyncExternalStore(subscribeRunner, runnerState, runnerState)
   const [notice, setNotice] = useState<{ kind: 'ok' | 'err'; text: string } | undefined>(undefined)
   const [groups, setGroups] = useState<ReverseCardGroup[]>([])
   const [groupsNote, setGroupsNote] = useState<string | undefined>(undefined)
@@ -267,8 +303,63 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
   const [activeModel, setActiveModel] = useState<ActiveModelResult | undefined>(undefined)
   const [extraOpen, setExtraOpen] = useState(false)
 
-  const abortRef = useRef<AbortController | undefined>(undefined)
   const noticeTimer = useRef<number | undefined>(undefined)
+
+  /* ------------------------------------------------------------ 跨卸载持久化
+
+     切到别的会话时主区面板会被卸载，切回来是重新挂载。下面三段 effect 就是为这条
+     生命周期写的：状态一变就写进 localStorage，挂载时（见上面的 bootRef）再读回来。
+     参数 + 正文那条小，图那条大，分两条键各写各的。 */
+
+  /**
+   * 参数 + 尺寸落盘。
+   *
+   * 只写自己负责的字段（读-改-写）：结果、中断标记、待消费卡片由执行体写，
+   * 而执行体可能在面板已经卸载之后才写 —— 两边整份覆盖会互相抹掉对方的字段。
+   */
+  useEffect(() => {
+    patchReverseSnapshot({
+      options,
+      meta: meta.width > 0 && meta.height > 0 ? meta : null,
+      hasImage: image !== '',
+    })
+  }, [options, meta, image])
+
+  /**
+   * 源图单独一条键：只在图本身变化时写。
+   *
+   * 超过 {@link MAX_IMAGE_SOFT_CHARS} 先压到长边 1024；压完仍超过 {@link MAX_IMAGE_CHARS}
+   * 就放弃存图 —— 一张巨图会把整个 origin 的配额占满，连带把参数与正文也写不进去。
+   * `imageWriteToken` 用来丢过期结果：连点两次选图时，慢的那次不该覆盖新的。
+   */
+  const imageWriteToken = useRef(0)
+  useEffect(() => {
+    const token = imageWriteToken.current + 1
+    imageWriteToken.current = token
+    if (image === '') { saveReverseImage(null); return }
+    void (async () => {
+      let value = image
+      if (value.length > MAX_IMAGE_SOFT_CHARS) value = await recompressForStorage(value)
+      if (imageWriteToken.current !== token) return
+      if (value.length > MAX_IMAGE_CHARS) {
+        saveReverseImage(null)
+        console.warn(`[dsh-creative-studio] 源图 ${Math.round(image.length / 1024)} KB 超过 localStorage 预算，这张图不记住（参数与正文照常记住）`)
+        return
+      }
+      saveReverseImage(value)
+    })()
+  }, [image])
+
+  /** 恢复回来的图若没带尺寸（旧存档 / 手改过），补测一次。 */
+  useEffect(() => {
+    if (image === '' || (meta.width > 0 && meta.height > 0)) return
+    let cancelled = false
+    void imageSize(image).then((size) => {
+      if (cancelled || size.width <= 0 || size.height <= 0) return
+      setMeta({ width: size.width, height: size.height, aspect: aspectOf(size.width, size.height) })
+    })
+    return () => { cancelled = true }
+  }, [image, meta])
 
   /** 行内提示，几秒后自动消失。 */
   const flash = useCallback((kind: 'ok' | 'err', text: string) => {
@@ -277,9 +368,15 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
     noticeTimer.current = window.setTimeout(() => setNotice(undefined), kind === 'ok' ? 2000 : 6000)
   }, [])
 
+  /**
+   * 卸载时只清行内提示的定时器。
+   *
+   * **刻意不再 abort 在飞请求**（2026-11-08 修）：切到别的会话 = 面板卸载，
+   * 原来这里会把一次 175 秒的反推一起掐掉。请求现在归执行体管，
+   * 只有用户点「取消」才中止。
+   */
   useEffect(() => () => {
     if (noticeTimer.current !== undefined) window.clearTimeout(noticeTimer.current)
-    abortRef.current?.abort()
   }, [])
 
   // 卡片库：进面板拉一次，失败只用提示，不影响反推
@@ -314,14 +411,51 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
     })
   }, [])
 
-  // 反推计时
+  /**
+   * 已用秒数：从 `run.startedAt` 现算，不存进 state。
+   *
+   * 这样「切走再回来」看到的是真实已用时间（不是从 0 重新计），而 running 态
+   * 只要一个 500ms 心跳把它刷新出来。
+   */
+  const [nowTick, setNowTick] = useState(() => Date.now())
   useEffect(() => {
-    if (run.kind !== 'running') { setElapsed(0); return }
-    const timer = window.setInterval(() => {
-      setElapsed(Math.round((Date.now() - run.startedAt) / 1000))
-    }, 1000)
+    if (run.kind !== 'running') return
+    const timer = window.setInterval(() => setNowTick(Date.now()), 500)
     return () => window.clearInterval(timer)
   }, [run])
+  const elapsed = run.kind === 'running'
+    ? Math.max(0, Math.round((nowTick - run.startedAt) / 1000))
+    : run.kind === 'interrupted' ? Math.round(run.elapsedMs / 1000) : 0
+
+  /**
+   * 拿不到聊天模型时自动重探一次（与旧版行为一致：失败后立刻刷新那个 model chip）。
+   */
+  useEffect(() => {
+    if (run.kind === 'error' && run.title === '拿不到当前聊天模型') refreshActiveModel()
+  }, [run, refreshActiveModel])
+
+  /**
+   * 消费模型预勾选的推荐卡片。
+   *
+   * 执行体把卡片 id 存在执行体状态 / 存档里（切走也留得住），这里映射成卡片对象
+   * 塞进参数，然后立刻清掉标记 —— 否则每次重挂载都会把用户手动取消的卡片又勾回来。
+   */
+  useEffect(() => {
+    const ids = pendingCards()
+    if (run.kind !== 'done' || ids.length === 0 || groups.length === 0) return
+    const byId = new Map<string, ReverseCard>()
+    for (const group of groups) for (const card of group.cards) byId.set(card.id, card)
+    const picked = ids
+      .map((id) => byId.get(id))
+      .filter((card): card is ReverseCard => card !== undefined)
+      .map((card) => ({
+        name: card.name,
+        why: card.why,
+        ...card.promptFragment === undefined ? {} : { fragment: card.promptFragment },
+      }))
+    if (picked.length > 0) setOptions((current) => ({ ...current, cards: picked }))
+    consumePendingCards()
+  }, [run, groups])
 
   const setOpt = useCallback(<K extends keyof ReverseOptions>(key: K, value: ReverseOptions[K]) => {
     setOptions((current) => ({ ...current, [key]: value }))
@@ -358,7 +492,8 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
       const size = await imageSize(reduced)
       setImage(reduced)
       setMeta({ width: size.width, height: size.height, aspect: aspectOf(size.width, size.height) })
-      setRun({ kind: 'idle' })
+      // 换图意味着上一条结果作废（它是旧图的），连中断标记一起清掉。
+      clearRun()
       setNotice(undefined)
     } catch (error) {
       flash('err', `读取图片失败：${error instanceof Error ? error.message : String(error)}`)
@@ -394,91 +529,23 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
    */
   const canReverse = image !== '' && run.kind !== 'running' && activeModel?.ok === true
 
-  /** 反推。 */
-  const reverse = useCallback(async () => {
+  /**
+   * 反推。
+   *
+   * 请求不在这里发，交给执行体（`startReverse`）：组件随时可能被卸载，
+   * 而一次反推要跑 60–175 秒 —— 请求必须活得比面板久。
+   */
+  const reverse = useCallback(() => {
     if (image === '' || run.kind === 'running') return
-    const controller = new AbortController()
-    abortRef.current = controller
     setNotice(undefined)
-    setRun({ kind: 'running', startedAt: Date.now() })
-    try {
-      const result = await backend.reverse(image, options, controller.signal)
-      if (result.ok) {
-        const body = result.text ?? ''
-        if (body === '') {
-          setRun({ kind: 'error', title: '反推没有返回内容', detail: '宿主回了 ok 但正文是空的', hint: '点「重新反推」再试一次。' })
-          return
-        }
-        // 模型预勾选：按推荐 id 找回卡片，写进已选列表（用户仍可取消）
-        const recommended = result.recommendedCards ?? []
-        if (recommended.length > 0) {
-          const byId = new Map<string, ReverseCard>()
-          for (const group of groups) {
-            for (const card of group.cards) byId.set(card.id, card)
-          }
-          const picked = recommended
-            .map((id) => byId.get(id))
-            .filter((card): card is ReverseCard => card !== undefined)
-            .map((card) => ({
-              name: card.name,
-              why: card.why,
-              ...card.promptFragment === undefined ? {} : { fragment: card.promptFragment },
-            }))
-          if (picked.length > 0) {
-            setOptions((current) => ({ ...current, cards: picked }))
-          }
-        }
-        setRun({
-          kind: 'done',
-          text: body,
-          type: result.type ?? '',
-          typeSource: result.typeSource ?? (result.type === undefined || result.type === '' ? 'none' : 'model'),
-          cardsSource: result.cardsSource ?? (recommended.length === 0 ? 'none' : 'model'),
-          provider: result.provider ?? '',
-          model: result.model ?? '',
-          routeSource: result.routeSource ?? '',
-          elapsedMs: result.elapsedMs ?? 0,
-          warnings: result.warnings ?? [],
-        })
-        return
-      }
-      // 失败：按失败码给可操作建议，原文照贴（老板要求「错误必须可见」）
-      const code = result.code ?? 'unknown'
-      const hint = code === 'timeout'
-        ? '可以在连接配置里换一个更快的模型，或直接重试。'
-        : code === 'no-active-model'
-          ? '反推必须用 DSH 当前配置的聊天模型。请到 DSH 模型设置里确认已选中一个可用模型，然后点上方「模型」chip 重新检测。插件不会偷偷换用其它模型。'
-          : code === 'llm-unavailable' || code === 'attachments-unavailable'
-            ? '宿主没有挂载所需服务，请确认 DSH 版本与插件是否匹配。'
-            : code === 'bad-image'
-              ? '换一张更小的图（长边 ≤ 2048）再试。'
-              : '可以切到 L3 档重试，或换一个模型。'
-      const title = code === 'timeout' ? '反推超时'
-        : code === 'no-active-model' ? '拿不到当前聊天模型'
-        : '反推失败'
-      setRun({ kind: 'error', title, detail: result.message ?? code, hint })
-      if (code === 'no-active-model') refreshActiveModel()
-    } catch (error) {
-      if (controller.signal.aborted) {
-        setRun({ kind: 'idle' })
-        flash('err', '已取消')
-        return
-      }
-      setRun({
-        kind: 'error',
-        title: '反推失败',
-        detail: error instanceof Error ? error.message : String(error),
-        hint: '把上面这段原文发给助手排查，或点「重反推」再试一次。',
-      })
-    } finally {
-      abortRef.current = undefined
-    }
-  }, [image, options, run, flash])
+    startReverse(image, options)
+  }, [image, options, run])
 
-  /** 取消在飞反推。 */
+  /** 取消在飞反推：这是唯一会中止上游（省 token）的入口。 */
   const cancel = useCallback(() => {
-    abortRef.current?.abort()
-  }, [])
+    cancelReverse()
+    flash('err', '已取消')
+  }, [flash])
 
   /** 正文（单版）。 */
   const currentText = run.kind === 'done' ? run.text : ''
@@ -575,7 +642,7 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
                 type="button"
                 className={styles.imgClear}
                 title="移除这张图"
-                onClick={() => { setImage(''); setMeta({ width: 0, height: 0, aspect: '—' }); setRun({ kind: 'idle' }) }}
+                onClick={() => { setImage(''); setMeta({ width: 0, height: 0, aspect: '—' }); clearRun() }}
               >
                 ✕
               </button>
@@ -856,14 +923,6 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
             </span>
             <button
               type="button"
-              className={`${styles.ck} ${options.keepSource === true ? styles.ckOn : ''}`}
-              onClick={() => setOpt('keepSource', options.keepSource !== true)}
-              title="生图阶段是否同时上传原图（参考图 2）；开着才会在提示词里出现「参考图 2」"
-            >
-              <i />生图时带原图
-            </button>
-            <button
-              type="button"
               className={styles.ck}
               onClick={() => setExtraOpen((open) => !open)}
               title="追加一句临时要求"
@@ -938,6 +997,15 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
             {run.detail !== undefined && <div className={styles.errRaw}>{run.detail}</div>}
             {run.hint !== undefined && <div className={styles.errHint}>{run.hint}</div>}
           </div>
+        ) : run.kind === 'interrupted' ? (
+          // 刷新 / 关窗会把浏览器那边一起打死（改不了），但必须如实说，不装成没跑过。
+          <div className={styles.stateBox}>
+            <div style={{ fontSize: 20, opacity: 0.6 }}>◷</div>
+            <div>上次反推被中断（刷新或关窗时打断）</div>
+            <div className={styles.errHint}>
+              已跑 {elapsed} 秒，结果没拿到；图和参数都还在，点「反推」重跑一次即可。
+            </div>
+          </div>
         ) : run.kind === 'done' ? (
           <div className={styles.promptCard} ref={cardRef} onScroll={syncActiveSection}>
             {sections.length === 0 ? (
@@ -1001,7 +1069,7 @@ export function ReversePane({ onUsePrompt }: ReversePaneProps): React.JSX.Elemen
             type="button"
             className={styles.goBtn}
             disabled={currentText === ''}
-            onClick={() => { if (currentText !== '') onUsePrompt(currentText, image) }}
+            onClick={() => { if (currentText !== '') onUsePrompt(currentText) }}
           >
             用这段去生图 →
           </button>

@@ -43,10 +43,20 @@ const fakeWebServer = {
 }
 
 const disposersRun = []
+/**
+ * 可现场插拔的宿主服务。
+ *
+ * 大部分用例要在「服务缺失」的前提下跑（比如 /active-model 必须如实回 no-active-model），
+ * 只有「浏览器断开后宿主是否真的中止上游」那条要临时插上假的 llm / attachments。
+ */
+const services = { llm: undefined, attachments: undefined, agentDefaultModel: undefined }
 const fakeContext = {
   inject(_deps, callback) {
     callback({
       webServer: fakeWebServer,
+      get(name) {
+        return services[name]
+      },
       effect(setup) {
         const dispose = setup()
         disposersRun.push(dispose)
@@ -279,6 +289,81 @@ check(
   activeResp.body?.ok === false && activeResp.body?.code === 'no-active-model',
   JSON.stringify(activeResp.body),
 )
+
+// ------------------------------------------------- 浏览器断开是否真的中止上游
+//
+// 2026-11-08 修的缺陷：原来只挂 `req.on('close')`，实测收不到「浏览器断开」——
+// 点取消 / 切走 / 关窗之后上游继续跑满 175 秒，token 照烧。
+// 这条用例插上假的 llm + attachments，发一个真请求，中途 abort 客户端，
+// 断言「假上游手里的 AbortSignal 真的被 abort 了」。
+
+let upstreamSignal
+/** 永不自己结束的假上游：等到 signal abort 才返回。 */
+async function* neverEndingStream({ signal }) {
+  upstreamSignal = signal
+  await new Promise((resolve) => {
+    if (signal.aborted) { resolve(); return }
+    signal.addEventListener('abort', resolve, { once: true })
+    // 兜底：自检不能被一条挂住的用例拖死。
+    setTimeout(resolve, 8000)
+  })
+  if (!signal.aborted) yield { type: 'text-delta', text: '迟到的正文' }
+}
+
+services.llm = { stream: neverEndingStream }
+services.attachments = { saveImages: async () => [{ id: 'smoke-attachment' }] }
+services.agentDefaultModel = { currentSelection: () => ({ provider: 'smoke', model: 'smoke-model' }) }
+
+const abortController = new AbortController()
+const reversePending = fetch(`http://127.0.0.1:${PORT}/dsh-creative/reverse`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ image: `data:image/png;base64,${Buffer.from('smoke').toString('base64')}` }),
+  signal: abortController.signal,
+}).then((response) => response.text()).catch(() => 'aborted-by-client')
+
+// 等反推真正进到上游（signal 挂上）再断开，避免断在路由之前测了个寂寞
+const enterDeadline = Date.now() + 3000
+while (Date.now() < enterDeadline && upstreamSignal === undefined) {
+  await new Promise((resolve) => setTimeout(resolve, 25))
+}
+check('反推请求进入了上游（假 llm 被调用）', upstreamSignal !== undefined)
+
+abortController.abort()
+await reversePending
+
+const abortDeadline = Date.now() + 3000
+while (Date.now() < abortDeadline && upstreamSignal?.aborted !== true) {
+  await new Promise((resolve) => setTimeout(resolve, 25))
+}
+check('浏览器断开后宿主真的中止了上游（不再白烧 token）', upstreamSignal?.aborted === true)
+
+// 服务摘掉，别影响后面的用例（它们要在「服务缺失」的前提下断言）
+services.llm = undefined
+services.attachments = undefined
+services.agentDefaultModel = undefined
+
+// 正常跑完那条路也必须验证：新挂的 `res.on('close')` 若误伤，会把**每一次**反推
+// 都在中途掐掉（表现为「反推永远超时/失败」），而这个回归在断开用例里看不出来。
+services.llm = {
+  async *stream() {
+    yield { type: 'text-delta', text: '类型：人像 · 写真\n卡片：无\n\n# 0 - 任务目标\n正文一段' }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  },
+}
+services.attachments = { saveImages: async () => [{ id: 'smoke-attachment' }] }
+services.agentDefaultModel = { currentSelection: () => ({ provider: 'smoke', model: 'smoke-model' }) }
+
+const normalReverse = await hit('POST', '/dsh-creative/reverse', {
+  body: { image: `data:image/png;base64,${Buffer.from('smoke').toString('base64')}` },
+})
+check('正常反推走通（新监听的 close 没有误伤）', normalReverse.status === 200 && normalReverse.body?.ok === true, JSON.stringify(normalReverse.body)?.slice(0, 120))
+check('正常反推返回六段正文', typeof normalReverse.body?.text === 'string' && normalReverse.body.text.includes('任务目标'), String(normalReverse.body?.text)?.slice(0, 40))
+check('正常反推解析出图片类型', normalReverse.body?.type === '人像 · 写真', String(normalReverse.body?.type))
+
+services.llm = undefined
+services.attachments = undefined
+services.agentDefaultModel = undefined
 
 const cardsResp = await hit('GET', '/dsh-creative/cards')
 check('GET /cards 200', cardsResp.status === 200, String(cardsResp.status))

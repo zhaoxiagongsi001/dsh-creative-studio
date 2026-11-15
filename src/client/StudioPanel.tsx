@@ -18,6 +18,7 @@ import styles from './studio.module.css'
 import { ImageGenPanel } from './ImageGenPanel.tsx'
 import { ReversePane } from './ReversePane.tsx'
 import { createHttpBackend } from './api.ts'
+import { loadStudioMode, saveStudioMode } from '../reverse/persist.ts'
 import type { Backend } from './types.ts'
 
 /** 宿主健康检查路径。与 `src/index.ts` 的 `API.health` 必须字面一致。 */
@@ -46,7 +47,6 @@ function apiPath(relative: string): string {
 
 /** 模式：图 → 词 / 词 → 图。 */
 type Mode = 'word' | 'image'
-
 /** 宿主自检状态。 */
 type HostState =
   | { kind: 'checking' }
@@ -55,7 +55,13 @@ type HostState =
 
 /** 面板根组件。 */
 export function StudioPanel(): React.JSX.Element {
-  const [mode, setMode] = useState<Mode>('word')
+  /**
+   * 上次停在哪一模式。
+   *
+   * 切会话会把面板卸载，切回来不该无故退回「图 → 词」—— 老板 2026-11-08 报的
+   * 「切走再切回内容消失」同一个根因，顺手一起记住。
+   */
+  const [mode, setMode] = useState<Mode>(() => loadStudioMode())
   const [host, setHost] = useState<HostState>({ kind: 'checking' })
   /**
    * 交接用的「待生效」标记。
@@ -65,6 +71,11 @@ export function StudioPanel(): React.JSX.Element {
    * 挂着（用户从词→图切回图→词再切回来），没有这一步就不会重读草稿。
    */
   const [handoff, setHandoff] = useState(0)
+
+  /** 模式一变就记住（下次挂载恢复，见上面的 lazy initializer）。 */
+  useEffect(() => {
+    saveStudioMode(mode)
+  }, [mode])
 
   useEffect(() => {
     let cancelled = false
@@ -84,12 +95,19 @@ export function StudioPanel(): React.JSX.Element {
     return () => { cancelled = true }
   }, [])
 
-  /** 把反推结果交给生图面板：写草稿 → 切模式。 */
-  const usePrompt = useCallback(async (text: string, image: string) => {
+  /**
+   * 把反推结果交给生图面板：写草稿 → 切模式。
+   *
+   * **只交接提示词，不交接图**（老板 2026-11-08 拍板）：
+   * 反推那张图只是「被反推的素材」，不是要拿去生图的参考图。生图阶段真正要贴的是
+   * 目标人物图，由他手动贴；自动塞进去等于把「原始画面」当成「要换的人」，正是
+   * `person-replace-spec.md` §0 铁律 1 禁止的做法。
+   */
+  const usePrompt = useCallback(async (text: string) => {
     try {
       await backend.importDraft({
         prompt: text,
-        references: image === '' ? [] : [image],
+        references: [],
         // 注意：**不要**传 lastGeneratedPrompt。传了与 prompt 相同的值会让生图面板
         // 判定「上次生成过」而显示空输入框，交接等于白做（IMPORT-API.md §6.1）。
       })
@@ -137,7 +155,7 @@ export function StudioPanel(): React.JSX.Element {
 
       {mode === 'word' ? (
         <div className={styles.wordBody}>
-          <ReversePane onUsePrompt={(text, image) => void usePrompt(text, image)} />
+          <ReversePane onUsePrompt={(text) => void usePrompt(text)} />
         </div>
       ) : (
         <div className={styles.imageBody}>

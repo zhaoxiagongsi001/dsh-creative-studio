@@ -332,13 +332,25 @@ export async function handleReverse(ctx: ReverseContext | readonly ReverseContex
     abortedBy = 'timeout'
     controller.abort()
   }, timeoutMs)
-  const onClose = (): void => {
-    if (!res.writableEnded) {
-      abortedBy = abortedBy === 'timeout' ? 'timeout' : 'client'
-      controller.abort()
-    }
+  /**
+   * 浏览器走人时的中止。
+   *
+   * **2026-11-08 修**：原来只挂了 `req.on('close')`，实测**收不到**「浏览器断开」——
+   * 请求体一读完，IncomingMessage 的 close 语义就不再对应「连接没了」，于是点取消
+   * 只断开前端、宿主这边 175 秒照跑，token 照烧，重试还会叠加请求。
+   *
+   * 现在挂真正会随连接消失而触发的那两个信号：
+   *   · `res.on('close')` —— 响应没写完连接就没了（客户端 abort / 关窗 / 刷新）；
+   *   · `req.on('aborted')` —— 老版本 Node 的断连事件，留着兜底。
+   * 正常结束时 `res.writableEnded === true`，这里直接跳过，不会误伤。
+   */
+  const onClientGone = (): void => {
+    if (res.writableEnded) return
+    abortedBy = abortedBy === 'timeout' ? 'timeout' : 'client'
+    controller.abort()
   }
-  req.on('close', onClose)
+  res.on('close', onClientGone)
+  req.on('aborted', onClientGone)
 
   const messages = [
     {
@@ -412,7 +424,8 @@ export async function handleReverse(ctx: ReverseContext | readonly ReverseContex
     return
   } finally {
     clearTimeout(timer)
-    req.off('close', onClose)
+    res.off('close', onClientGone)
+    req.off('aborted', onClientGone)
   }
 
   const text = assembled.trim()

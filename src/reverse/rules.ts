@@ -47,8 +47,6 @@ export interface ReverseOptions {
   redraw?: RedrawMode
   /** 锁脸强度。 */
   lockStrength?: LockStrength
-  /** 生图阶段是否会同时上传原图（决定提示词里能不能出现「参考图 2」）。 */
-  keepSource?: boolean
   /** 年龄定调（默认「成年」）。 */
   ageText?: string
   /** 锁定的维度名字数组，例如 ['构图','光线']。 */
@@ -172,12 +170,15 @@ const REDRAW_TEXT: Record<RedrawMode, string> = {
   D3: '仅锁定身份（脸）、大体姿态与整体影调，其余背景、道具、细节允许重新组织；不追求逐像素还原，追求同一组拍摄条件下的另一张成片。',
 }
 
-/** 姿态三档（仅 A2/A3 可选，P185-187 原文）。 */
-function poseLine(pose: PoseMode, poseText: string, keepSource: boolean): string {
+/**
+ * 姿态三档（仅 A2/A3 可选，P185-187 原文）。
+ *
+ * C2 只有一种写法：姿态取自「参考图（即本图）」。原来还有个「带原图 → 参考图 2」的
+ * 分支，2026-11-08 随「生图时带原图」开关一起删掉 —— 生图阶段不再有第二张图。
+ */
+function poseLine(pose: PoseMode, poseText: string): string {
   if (pose === 'C2') {
-    return keepSource
-      ? '姿态：整体姿态、身体重心、四肢角度与手部动作取自参考图 2；保留原图的机位高度与视线方向。'
-      : '姿态：整体姿态、身体重心、四肢角度与手部动作取自参考图（即本图），保持原图机位高度与视线方向。'
+    return '姿态：整体姿态、身体重心、四肢角度与手部动作取自参考图（即本图），保持原图机位高度与视线方向。'
   }
   if (pose === 'C3') {
     const text = poseText.trim() === '' ? '（用户未填写，按原图姿态）' : poseText.trim()
@@ -192,19 +193,18 @@ function personBlock(options: ReverseOptions): string {
   const clothing = options.clothing ?? 'B1'
   const redraw = options.redraw ?? 'D2'
   const lock = options.lockStrength ?? 'medium'
-  const keepSource = options.keepSource === true
   const age = typeof options.ageText === 'string' && options.ageText.trim() !== '' ? options.ageText.trim() : '成年'
 
   const lines: string[] = []
 
   // ---- 服装（三档独立于 A 组，P161）
+  // B2 只有一种写法：服装取自「参考图（即本图）」。原「带原图 → 参考图 2」分支随
+  // 2026-11-08 的开关删除一并去掉。
   let clothingLine: string
   if (clothing === 'B2') {
     const visible = options.clothingVisible === true
     clothingLine = visible
-      ? keepSource
-        ? '服装：款式、面料、图案与配色取自参考图 2；保留原图的服装在画面中的占比、走向与光影关系（例如原图是短外套 + 高腰裤，新图也保持上下装的分段与腰线位置），仅替换具体款式。'
-        : '服装：款式、面料、图案与配色取自参考图（即本图）；保持服装在画面中的占比、走向与光影关系，仅替换具体款式。'
+      ? '服装：款式、面料、图案与配色取自参考图（即本图）；保持服装在画面中的占比、走向与光影关系，仅替换具体款式。'
       : '服装：用户未确认目标图中能看清服装，按 B1 口径处理——款式、领型、袖型、下摆长度、面料与图案完全按原图，不改颜色、不加配饰；允许因的身形而出现自然的合身度与褶皱差异。'
   } else if (clothing === 'B3') {
     const text = typeof options.clothingText === 'string' ? options.clothingText.trim() : ''
@@ -252,7 +252,7 @@ function personBlock(options: ReverseOptions): string {
 
   // ---- C 组（仅 A2/A3）
   if (tier === 'A2' || tier === 'A3') {
-    lines.push(poseLine(options.pose ?? 'C1', options.poseText ?? '', keepSource))
+    lines.push(poseLine(options.pose ?? 'C1', options.poseText ?? ''))
   }
 
   lines.push(clothingLine)

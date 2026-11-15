@@ -181,7 +181,7 @@ checkContains(panel, '反推参数', '右栏有「反推参数」带（v2 要求
 checkContains(panel, '模型检测中', '参数带显示当前聊天模型探测状态')
 checkContains(panel, '模型检测中', '首帧处于模型探测中（不会伪造模型名）')
 checkNotContains(panel, 'opencode-go', '界面不出现硬编码兜底模型名')
-// M4：换人/服装/姿态/重绘四组互斥档位 + 锁脸 + 带原图开关
+// M4：换人/服装/姿态/重绘四组互斥档位 + 锁脸
 checkContains(panel, 'A1 只换脸', '参数带：换人 A1 档')
 checkContains(panel, 'A2 换脸+身材', '参数带：换人 A2 档')
 checkContains(panel, 'A3 全身含姿态', '参数带：换人 A3 档')
@@ -191,7 +191,9 @@ checkContains(panel, 'B3 自填', '参数带：服装 B3 档')
 checkContains(panel, 'C1 保持原图', '参数带：姿态 C1 档')
 checkContains(panel, 'D1 保守', '参数带：重绘 D1 档')
 checkContains(panel, 'D2 平衡', '参数带：重绘 D2 档')
-checkContains(panel, '生图时带原图', '参数带：带原图开关')
+// 2026-11-08：老板拍板「图生文的参考图不带进文生图」，这个开关一起删掉。
+// 断言它真的从界面上消失 —— 留着按钮却不再起作用比没有更难查。
+checkNotContains(panel, '生图时带原图', '参数带不再有「生图时带原图」开关（2026-11-08 删除）')
 checkContains(panel, '锁定', '参数带有锁定组')
 checkContains(panel, 'NSFW', '参数带有 NSFW 组')
 // 换人没开时不显示锁脸强度（默认不换人 → 该组隐藏）
