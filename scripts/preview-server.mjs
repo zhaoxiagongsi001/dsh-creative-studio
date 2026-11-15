@@ -2,8 +2,9 @@
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = path.resolve('D:/DSH/dsh-creative-studio/preview')
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'preview')
 const PORT = 4791
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png' }
 

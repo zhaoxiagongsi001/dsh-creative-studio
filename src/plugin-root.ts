@@ -13,6 +13,6 @@ export function pluginRoot(): string {
   try {
     return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
   } catch {
-    return 'D:/DSH/dsh-creative-studio'
+    return process.cwd()
   }
 }

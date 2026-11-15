@@ -11,11 +11,12 @@
  * = ["moderation", "complexity"]，没给枚举值也没给语义；联网搜不到。所以只能黑盒试。
  *
  * 费用：3 张 1024×1024，按该模型定价约 $0.01-0.05/张，总计几毛钱人民币。
- * 产物落到 D:/DSH/creative-merge/probe/ 下，不改任何生产数据。
+ * 产物落到本目录下的 probe/ 里，不改任何生产数据。
  *
  * 用法：node scripts/probe-complexity.mjs
  */
 import { writeFile, mkdir } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -24,7 +25,7 @@ const outDir = path.join(root, 'probe')
 await mkdir(outDir, { recursive: true })
 
 // ---- 从用户配置里读 Key（不落盘、不打印）
-const cfgPath = path.join(process.env.DSH_HOME ?? 'C:/Users/zhang/.dsh', 'dsh-imagegen-panel', 'config.json')
+const cfgPath = path.join(process.env.DSH_HOME ?? path.join(homedir(), '.dsh'), 'dsh-imagegen-panel', 'config.json')
 const cfg = JSON.parse(await (await import('node:fs/promises')).readFile(cfgPath, 'utf8'))
 const base = cfg.baseUrl ?? 'https://openrouter.ai/api/v1'
 const key = cfg.apiKey

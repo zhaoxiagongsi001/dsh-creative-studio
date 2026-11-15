@@ -71,7 +71,7 @@ src/
     api.ts / types.ts / labels.ts / defaults.ts / optimize.ts / art.tsx
     *.module.css            三套 CSS Module（真实 design token）
 data/suggestion-cards.json  60 张建议卡片（6 组）
-docs/                       三份设计规范（方言 / NSFW / 换人）
+docs/                       设计规范（本次公开版本不入库，本地保留）
 locale/                     zh / en
 scripts/                    构建 + 5 套自检 + 预览 + 实测
 ```
@@ -122,7 +122,7 @@ Q5 拍板沿用原目录，所以合并后**老板已有的历史图、配置、
 ## 5. 构建与自检
 
 ```powershell
-cd D:\DSH\dsh-creative-studio
+cd dsh-creative-studio          # 换成你自己的插件目录
 node scripts\build.mjs            # 产出 lib/index.js + lib/client.js
 npm run check                     # 全套：232 项（数字以脚本输出为准）
 ```
@@ -193,4 +193,4 @@ npm run check                     # 全套：232 项（数字以脚本输出为�
 
 ## 9. 回滚
 
-见 `D:/DSH/creative-merge/ROLLBACK.md`。**旧插件目录全程没删**，只从 profile 摘掉引用。
+见本地备份目录里的 `ROLLBACK.md`（不入库）。**旧插件目录全程没删**，只从 profile 摘掉引用。
