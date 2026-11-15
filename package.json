@@ -1,6 +1,6 @@
 {
   "name": "dsh-creative-studio",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Image creation studio for the DSH web GUI: one panel that reverses a reference image into a prompt and generates images from it. Sidebar entry '图像创作'.",
   "type": "module",
   "main": "lib/index.js",
