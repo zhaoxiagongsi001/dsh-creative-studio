@@ -640,6 +640,27 @@ export function Composer(props: ComposerProps): React.JSX.Element {
   pickFileRef.current = pickFile
 
   /**
+   * 按剩余预算挑出一次能收下的文件（宁少勿多）。
+   *
+   * 光截张数不够：预算按 data URL 字符算，4 张 4 MB 的图合计就超过 20 MB 的字符上限，
+   * 而 `pickFile` 里每张各自看预算都是通过的（它看到的是上一次渲染的 `props.references`）。
+   * 文件选择框与粘贴都一次可能给多张，统一在这里先按实际文件大小过一遍。
+   * 单张转成 data URL 后约为原文件大小的 4/3，按它估。
+   */
+  const fitToBudget = (files: File[], room: number): File[] => {
+    let left = MAX_REFERENCES_TOTAL_CHARS - usedChars
+    const accepted: File[] = []
+    for (const file of files) {
+      if (accepted.length >= room) break
+      const need = Math.ceil((file.size * 4) / 3)
+      if (need > left) break
+      left -= need
+      accepted.push(file)
+    }
+    return accepted
+  }
+
+  /**
    * 粘贴监听只挂一次，回调里读到的 props 会过期，所以把「会变的两样」放进 ref。
    *
    * - `onNotice`：面板传的是内联箭头函数（每次渲染都是新引用）。若写进依赖数组，
@@ -712,9 +733,15 @@ export function Composer(props: ComposerProps): React.JSX.Element {
         return
       }
       // 一次只收放得下的张数：不让「每张各自看上限都通过、加起来超限」发生。
-      const accepted = files.slice(0, room)
+      const accepted = fitToBudget(files, room)
       if (accepted.length < files.length) {
-        noticeRef.current?.(`剪贴板里有 ${files.length} 张图，本次只加了 ${accepted.length} 张（上限 ${refLimit} 张）`, 'err')
+        noticeRef.current?.(
+          `剪贴板里有 ${files.length} 张图，本次只加了 ${accepted.length} 张（受张数上限 ${refLimit} 张或总预算限制）`,
+          'err',
+        )
+      }
+      if (accepted.length === 0) {
+        noticeRef.current?.(`参考图总预算已满（${formatChars(MAX_REFERENCES_TOTAL_CHARS)}），先移除一张再粘贴`, 'err')
       }
       for (const file of accepted) void pickFileRef.current(file)
     }
@@ -815,7 +842,15 @@ export function Composer(props: ComposerProps): React.JSX.Element {
             onChange={(event) => {
               const files = Array.from(event.target.files ?? [])
               event.target.value = ''
-              for (const file of files) void pickFile(file)
+              // 与粘贴同一条预算闸：一次选多张时先按实际大小截断。
+              const accepted = fitToBudget(files, Math.max(0, refLimit - props.references.length))
+              for (const file of accepted) void pickFile(file)
+              if (accepted.length < files.length) {
+                props.onNotice?.(
+                  `选了 ${files.length} 张，本次只加了 ${accepted.length} 张（受张数上限 ${refLimit} 张或总预算限制）`,
+                  'err',
+                )
+              }
             }}
           />
         </div>
