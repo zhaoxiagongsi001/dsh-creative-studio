@@ -96,4 +96,6 @@ export { PANEL_ID, SidebarIcon }
 export { StudioPanel, apiPath as studioApiPath } from './StudioPanel.tsx'
 export { ReversePane, parseSections, aspectOf, LOCK_DIMENSIONS, DEFAULT_LOCKS } from './ReversePane.tsx'
 export { ImageGenPanel } from './ImageGenPanel.tsx'
+/** 单独导出给 `scripts/render-check.mjs`：要拿自定义参数表验证「哪些字段该渲染」。 */
+export { Composer } from './Composer.tsx'
 export { createHttpBackend, ROUTES } from './api.ts'

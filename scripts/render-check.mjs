@@ -238,6 +238,50 @@ check(
   `生成按钮位置 ${genAt} / 参数区 ${paramsAt}`,
 )
 
+// 随机种子（seed）按老板 2026-11-15 的要求下线。首帧没有模型能力表，走的是
+// LEGACY_FIELDS（本来就没有 seed），那样断言会恒真 —— 所以这里自己造一份
+// **声明了 seed 的参数表**喂给 Composer，验证它被过滤、而相邻字段仍在。
+const seededComposer = render(h(clientExports.Composer, {
+  prompt: '',
+  onPromptChange: () => {},
+  references: [],
+  onAddReference: () => {},
+  onRemoveReference: () => {},
+  params: { aspectRatio: '1:1', resolution: '1K', count: '1', quality: 'auto' },
+  onParamChange: () => {},
+  model: {
+    id: 'seed-test-model',
+    caps: ['图生图'],
+    price: '$0.01/张',
+    supportsReferences: true,
+    references: { min: 0, max: 4 },
+  },
+  running: false,
+  notConfigured: false,
+  onGenerate: () => {},
+  onCancel: () => {},
+  onOpenModelPicker: () => {},
+  onOpenConfig: () => {},
+  extra: {},
+  onExtraChange: () => {},
+  parameters: [
+    {
+      name: 'aspect_ratio', label: '比例', control: 'select', valueType: 'string', group: 'output',
+      values: ['1:1'], clearable: false, default: '1:1',
+    },
+    {
+      name: 'seed', label: '随机种子', control: 'text', valueType: 'integer', group: 'advanced',
+      clearable: true, default: '',
+    },
+    {
+      name: 'background', label: '背景', control: 'select', valueType: 'string', group: 'advanced',
+      values: ['auto', 'transparent'], clearable: false, default: 'auto',
+    },
+  ],
+}), 'Composer（参数表声明了 seed）')
+checkNotContains(seededComposer, '随机种子', '参数区不再渲染随机种子（老板 2026-11-15 下线）')
+checkContains(seededComposer, '背景', '同一份参数表里的其它字段仍照常渲染')
+
 // 反推工作区单独渲染（给它一个回调，确认 props 契约成立）
 const reversePane = render(h(clientExports.ReversePane, { onUsePrompt: () => {} }), 'ReversePane')
 checkContains(reversePane, '把图片拖到这里', '反推：空图态有拖入提示')

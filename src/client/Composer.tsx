@@ -498,9 +498,14 @@ export function Composer(props: ComposerProps): React.JSX.Element {
 
   // 参数行**由所选模型的参数表驱动**：模型声明了什么就显示什么。
   // 拿不到能力表（非 OpenRouter 协议 / 老宿主）时退化成固定的四项。
+  //
+  // `seed`（随机种子）按老板 2026-11-15 的要求下线：这一个字段对出图没有可见收益，
+  // 却要求用户理解「填死 = 每次一样、留空 = 每次随机」，是面板上最需要解释的一格。
+  // 只隐藏界面入口；`FIELD_SPECS` 与 `FIELD_LABELS` 仍保留它 —— 历史图的参数行
+  // 还要显示当时用过的 seed，那是历史事实，不该跟着新界面一起抹掉。
   const fields = props.parameters ?? []
   const dynamic = fields.length > 0
-  const shown = dynamic ? fields : LEGACY_FIELDS
+  const shown = (dynamic ? fields : LEGACY_FIELDS).filter((field) => field.name !== 'seed')
   const outputFields = shown.filter((field) => field.group === 'output')
   const advancedFields = shown.filter((field) => field.group === 'advanced')
 
@@ -567,9 +572,8 @@ export function Composer(props: ComposerProps): React.JSX.Element {
     .map((item) => `${item.field.label} ${item.value}`)
     .slice(0, 5)
 
-  /** 留空语义各不相同的三个字段，placeholder 必须分开写。 */
+  /** 留空语义各不相同的三个字段，placeholder 必须分开写（seed 已下线，不再需要）。 */
   const placeholderOf = (field: ParameterField): string => {
-    if (field.name === 'seed') return '留空 = 每次随机'
     if (field.name === 'size') return '如 2K 或 2048x2048'
     if (field.name === 'output_compression') return '0–100，留空 = 上游默认'
     return '留空 = 不发送'

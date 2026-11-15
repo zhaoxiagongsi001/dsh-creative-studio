@@ -853,6 +853,20 @@ export function ImageGenPanel(): React.JSX.Element {
 
   // --------------------------------------------------------------- 生成
 
+  /**
+   * 随机种子入口已下线（老板 2026-11-15）：界面不再渲染 `seed`，历史草稿里若还留着
+   * 这个键，也不该继续发出去 —— 否则会出现「界面上没有这一格，请求里却带着它」。
+   * 只影响新请求；历史图的参数行仍照实显示当时的 seed。
+   */
+  const sendExtra = useMemo((): Record<string, string> => {
+    if (!('seed' in extra)) return extra
+    const rest: Record<string, string> = {}
+    for (const [name, value] of Object.entries(extra)) {
+      if (name !== 'seed') rest[name] = value
+    }
+    return rest
+  }, [extra])
+
   const generate = useCallback((): void => {
     if (config === undefined) return
     // 本地先拦掉两类「必被上游拒」的请求 —— 让用户看一句人话，而不是等 90 秒换回 502。
@@ -880,13 +894,13 @@ export function ImageGenPanel(): React.JSX.Element {
       count: Number(params.count) || 1,
       quality: params.quality,
       references: references.map((item) => item.dataUrl),
-      // 模型驱动表单收集的其它字段（`background` / `seed` / `size` / `stream` …）。
+      // 模型驱动表单收集的其它字段（`background` / `size` / `stream` …；`seed` 已下线）。
       // 宿主会按同一份能力表再裁一次：这里给什么，它都要过一遍「该模型是否声明」
       // 与「取值是否在枚举/区间内」，所以多给不会出错，只会被如实记进 `dropped`。
-      ...Object.keys(extra).length === 0 ? {} : { extra },
+      ...Object.keys(sendExtra).length === 0 ? {} : { extra: sendExtra },
     })
     setElapsedSec(0)
-  }, [config, modelCaps, model, references, prompt, params, extra, notify])
+  }, [config, modelCaps, model, references, prompt, params, sendExtra, notify])
 
   const cancel = useCallback((): void => {
     cancelGenerate()
