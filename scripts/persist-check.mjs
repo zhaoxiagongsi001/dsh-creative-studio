@@ -275,6 +275,7 @@ const {
   coerceGenerateError,
   emptyGenerateSnapshot,
   resolveGenerateBoot,
+  resolveGenerateBootFor,
   patchGenerateSnapshot,
   loadGenerateSnapshot,
   loadGenerateBootRun,
@@ -283,12 +284,14 @@ const {
   GENERATE_SNAPSHOT_VERSION,
   MAX_GENERATE_INTERRUPTED_MS,
   MAX_GENERATE_ERROR_MS,
+  MAX_GENERATE_OWNER,
 } = mod
 
 equals('生图存档键名固定（改键名 = 老数据全丢）', GENERATE_STATE_KEY, 'dsh-creative.generate.state.v1')
 equals('生图存档版本号', GENERATE_SNAPSHOT_VERSION, 1)
 equals('中断判定窗口是 30 分钟', MAX_GENERATE_INTERRUPTED_MS, 30 * 60 * 1000)
 equals('报错保留窗口是 1 小时', MAX_GENERATE_ERROR_MS, 60 * 60 * 1000)
+equals('页面实例 id 上限 64 字符', MAX_GENERATE_OWNER, 64)
 
 check('非对象返回 undefined（按没有存档处理）', coerceGenerateSnapshot('nonsense') === undefined)
 check('null 返回 undefined', coerceGenerateSnapshot(null) === undefined)
@@ -300,14 +303,19 @@ equals('数组当空存档收敛（不炸）', coerceGenerateSnapshot([]).inflig
 equals('inflight 缺 startedAt 当没有', coerceGenerateInflight({ prompt: 'x' }), null)
 equals('inflight startedAt 非法当没有', coerceGenerateInflight({ startedAt: 'abc' }), null)
 equals('inflight startedAt 为 0 当没有', coerceGenerateInflight({ startedAt: 0 }), null)
-equals('inflight 认数字字符串（手改 JSON 常见）', coerceGenerateInflight({ startedAt: '1700000000000', prompt: 'p' }), { startedAt: 1700000000000, prompt: 'p' })
+equals('inflight 认数字字符串（手改 JSON 常见）', coerceGenerateInflight({ startedAt: '1700000000000', prompt: 'p' }), { startedAt: 1700000000000, prompt: 'p', owner: '' })
 equals('inflight 提示词超长截断', coerceGenerateInflight({ startedAt: 1, prompt: 'x'.repeat(30000) }).prompt.length, 20000)
+equals('inflight 记下发起页面的实例 id（多标签页判归属）', coerceGenerateInflight({ startedAt: 1, owner: 'page-a' }).owner, 'page-a')
+equals('inflight 实例 id 超长截断', coerceGenerateInflight({ startedAt: 1, owner: 'x'.repeat(200) }).owner.length, MAX_GENERATE_OWNER)
+equals('inflight 缺实例 id 给空串（老存档兼容）', coerceGenerateInflight({ startedAt: 1 }).owner, '')
 
 equals('error 两段都空当没有', coerceGenerateError({ message: '   ', detail: '' }), null)
 equals('error 只有 detail 时标题兜底', coerceGenerateError({ detail: 'boom' }).message, '生成失败')
 equals('error 标题超长截断', coerceGenerateError({ message: 'x'.repeat(999), detail: 'd' }).message.length, 500)
 equals('error 原文超长截断', coerceGenerateError({ message: 'm', detail: 'x'.repeat(30000) }).detail.length, 20000)
 equals('error 带上那次生成用的提示词', coerceGenerateError({ message: 'm', detail: 'd', prompt: '一只猫', at: 1000 }).prompt, '一只猫')
+equals('error 保住「计费未知」标记', coerceGenerateError({ message: 'm', detail: 'd', billing: 'unknown' }).billing, 'unknown')
+check('error 没有标记时不乱写 billing', coerceGenerateError({ message: 'm', detail: 'd' }).billing === undefined)
 
 const genSnap = (patch) => ({ ...emptyGenerateSnapshot(), ...patch })
 equals('没有存档 → 空态', resolveGenerateBoot(undefined).kind, 'idle')
@@ -325,6 +333,26 @@ equals(
   '中断态带回提示词（「重新生成」要能直接重跑）',
   resolveGenerateBoot(genSnap({ inflight: { startedAt: 1000, prompt: '一只猫' } }), 61_000).prompt,
   '一只猫',
+)
+equals(
+  '中断态带着发起页面的实例 id',
+  resolveGenerateBoot(genSnap({ inflight: { startedAt: 1000, prompt: 'x', owner: 'page-a' } }), 61_000).owner,
+  'page-a',
+)
+equals(
+  '别人标签页在跑 → 本页不显示中断（否则会重复付费重试）',
+  resolveGenerateBootFor(genSnap({ inflight: { startedAt: 1000, prompt: 'x', owner: 'page-a' } }), 'page-b', 61_000).kind,
+  'idle',
+)
+equals(
+  '同一个页面实例 → 照旧显示中断',
+  resolveGenerateBootFor(genSnap({ inflight: { startedAt: 1000, prompt: 'x', owner: 'page-a' } }), 'page-a', 61_000).kind,
+  'interrupted',
+)
+equals(
+  '老存档没有实例 id → 仍按本页中断处理（兼容升级前的数据）',
+  resolveGenerateBootFor(genSnap({ inflight: { startedAt: 1000, prompt: 'x', owner: '' } }), 'page-b', 61_000).kind,
+  'interrupted',
 )
 equals(
   '太久的中断标记当没有（30 分钟后不再弹吓人的中断提示）',
@@ -364,12 +392,12 @@ console.log('\n[生图：存取往返]')
 store.clear()
 check('写成功', saveGenerateSnapshot({
   version: GENERATE_SNAPSHOT_VERSION,
-  inflight: { startedAt: 50_000, prompt: '一只穿风衣的猫' },
+  inflight: { startedAt: 50_000, prompt: '一只穿风衣的猫', owner: 'page-a' },
   error: null,
   updatedAt: 1,
 }) === true)
 const genLoaded = loadGenerateSnapshot()
-equals('往返：在飞标记保住', genLoaded.inflight, { startedAt: 50_000, prompt: '一只穿风衣的猫' })
+equals('往返：在飞标记保住', genLoaded.inflight, { startedAt: 50_000, prompt: '一只穿风衣的猫', owner: 'page-a' })
 equals('往返：没有报错', genLoaded.error, null)
 
 // 两个写者（执行体写 inflight/error，加载时读）互不抹掉
@@ -377,7 +405,7 @@ patchGenerateSnapshot({ inflight: null, error: { message: '生成失败', detail
 const genPatched = loadGenerateSnapshot()
 equals('patch：清 inflight 后报错写进去了', genPatched.error.message, '生成失败')
 equals('patch：报错原文保住', genPatched.error.detail, '上游超时')
-patchGenerateSnapshot({ inflight: { startedAt: 3_000_000, prompt: '再试一次' } })
+patchGenerateSnapshot({ inflight: { startedAt: 3_000_000, prompt: '再试一次', owner: 'page-a' } })
 equals('patch：新一次在飞不被旧报错顶掉', loadGenerateSnapshot().inflight.startedAt, 3_000_000)
 
 // 手改坏 JSON：不能抛，按空存档处理

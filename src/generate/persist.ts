@@ -37,6 +37,9 @@ export const MAX_GENERATE_TEXT = 20000
 /** 报错标题最多存多少字符（标题是短句，超长一定是被手改过）。 */
 export const MAX_GENERATE_TITLE = 500
 
+/** 页面实例 id 最多存多少字符（正常是 20 位左右的随机串）。 */
+export const MAX_GENERATE_OWNER = 64
+
 /**
  * 「上次在跑」最多认多久。
  *
@@ -59,6 +62,13 @@ export interface GenerateFailure {
   message: string
   /** 展开后的原文（含 code 与宿主 diagnostics）。 */
   detail: string
+  /**
+   * 计费口径存疑时标 `'unknown'`。
+   *
+   * 「这次请求没有拿到结果」不等于「本次未计费」：请求可能已经到上游并出了图。
+   * 面板据此换掉那句「本次未计费」，不要给出错误的账单承诺。
+   */
+  billing?: 'unknown'
 }
 
 /** 「某时刻开始、还没写回结果」的标记。 */
@@ -67,6 +77,13 @@ export interface GenerateInflight {
   startedAt: number
   /** 发起时的提示词（截断后）；只用于「被中断」时说清那次要生什么。 */
   prompt: string
+  /**
+   * 发起这次请求的页面实例 id（存在 sessionStorage，刷新不变、新标签页会换）。
+   *
+   * 没有它的时候，开第二个标签页会把第一个标签页正在跑的请求误判成「上次被中断」，
+   * 用户一刷新再点重试就是两次付费请求。空串表示老存档 / 拿不到 sessionStorage。
+   */
+  owner: string
 }
 
 /** 一次失败的存档。 */
@@ -93,7 +110,7 @@ export interface GenerateSnapshot {
  */
 export type GenerateBoot =
   | { kind: 'idle' }
-  | { kind: 'interrupted'; elapsedMs: number; prompt: string }
+  | { kind: 'interrupted'; elapsedMs: number; prompt: string; owner: string }
   | { kind: 'error'; failure: GenerateFailure; prompt: string }
 
 /* ------------------------------------------------------------------ 收敛 */
@@ -116,7 +133,11 @@ export function coerceGenerateInflight(value: unknown): GenerateInflight | null 
   const record = value as Record<string, unknown>
   const startedAt = generateIntOf(record.startedAt, Number.MAX_SAFE_INTEGER)
   if (startedAt <= 0) return null
-  return { startedAt, prompt: generateTextOf(record.prompt, MAX_GENERATE_TEXT) }
+  return {
+    startedAt,
+    prompt: generateTextOf(record.prompt, MAX_GENERATE_TEXT),
+    owner: generateTextOf(record.owner, MAX_GENERATE_OWNER),
+  }
 }
 
 /** 收敛失败记录；标题与原文都空的记录没有意义，当没有。 */
@@ -131,6 +152,7 @@ export function coerceGenerateError(value: unknown): GenerateErrorRecord | null 
     detail,
     prompt: generateTextOf(record.prompt, MAX_GENERATE_TEXT),
     at: generateIntOf(record.at, Number.MAX_SAFE_INTEGER),
+    ...(record.billing === 'unknown' ? { billing: 'unknown' as const } : {}),
   }
 }
 
@@ -167,7 +189,12 @@ export function resolveGenerateBoot(snapshot: GenerateSnapshot | undefined, now:
   if (snapshot.inflight !== null) {
     const elapsedMs = now - snapshot.inflight.startedAt
     if (Number.isFinite(elapsedMs) && elapsedMs >= 0 && elapsedMs <= MAX_GENERATE_INTERRUPTED_MS) {
-      return { kind: 'interrupted', elapsedMs, prompt: snapshot.inflight.prompt }
+      return {
+        kind: 'interrupted',
+        elapsedMs,
+        prompt: snapshot.inflight.prompt,
+        owner: snapshot.inflight.owner,
+      }
     }
   }
   if (snapshot.error !== null) {
@@ -175,7 +202,11 @@ export function resolveGenerateBoot(snapshot: GenerateSnapshot | undefined, now:
     if (Number.isFinite(age) && age >= 0 && age <= MAX_GENERATE_ERROR_MS) {
       return {
         kind: 'error',
-        failure: { message: snapshot.error.message, detail: snapshot.error.detail },
+        failure: {
+          message: snapshot.error.message,
+          detail: snapshot.error.detail,
+          ...(snapshot.error.billing === 'unknown' ? { billing: 'unknown' as const } : {}),
+        },
         prompt: snapshot.error.prompt,
       }
     }
@@ -302,4 +333,25 @@ export function clearGenerateSnapshot(): void {
  */
 export function loadGenerateBootRun(now: number = Date.now()): GenerateBoot {
   return resolveGenerateBoot(coerceGenerateSnapshot(generateReadJson(GENERATE_STATE_KEY)), now)
+}
+
+/**
+ * 同样的判定，但按「本页面实例」过滤：别人的 in-flight 不算本页中断。
+ *
+ * 存档是 localStorage（跨标签页共享）。A 标签页发起后写了 inflight，B 标签页加载
+ * 时若照旧显示「上次生成被中断」，用户在 B 点重试就是第二次付费请求 —— 而 A 那次
+ * 其实还在跑。owner 对不上就当没有，安静给 idle。
+ * @param snapshot - 读回来的快照。
+ * @param owner - 本页面实例 id（空串表示不认识自己，按老行为处理）。
+ * @param now - 当前时间（毫秒），测试里可以注入。
+ * @returns 该显示的运行态。
+ */
+export function resolveGenerateBootFor(
+  snapshot: GenerateSnapshot | undefined,
+  owner: string,
+  now: number = Date.now(),
+): GenerateBoot {
+  const boot = resolveGenerateBoot(snapshot, now)
+  if (boot.kind === 'interrupted' && boot.owner !== '' && boot.owner !== owner) return { kind: 'idle' }
+  return boot
 }

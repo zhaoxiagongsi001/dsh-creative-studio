@@ -34,7 +34,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createHttpBackend } from './api.ts'
-import { cancelGenerate, dismissGenerateError, runnerState, startGenerate, subscribeRunner } from './generate-runner.ts'
+import { cancelGenerate, clearGeneratedStage, dismissGenerateError, runnerState, startGenerate, subscribeRunner } from './generate-runner.ts'
 import { ArtDefs } from './art.tsx'
 import { Composer, GLOBAL_MAX_REFERENCES, prepareReference, referenceLimit, referencesRequired, type ParamState, type Reference } from './Composer.tsx'
 import { ConfigModal } from './ConfigModal.tsx'
@@ -1333,6 +1333,12 @@ export function ImageGenPanel(): React.JSX.Element {
              */
             pendingDraft.current = undefined
             void backend.saveDraft({ prompt, params, extra, lastGeneratedPrompt, lastImageId: '', updatedAt: 0 })
+            /**
+             * 运行态也要一起收：`done` 是终态、不会自己回 idle，完成回灌的 effect
+             * 会拿 `run.image` 把舞台和 `lastImageId` 又摆回来（切走再回来最明显）。
+             * 收成 idle 之后，上面三行清的才是真的清。
+             */
+            clearGeneratedStage()
             notify('历史已清空（仅本次会话）')
           }}
           {...toast === undefined ? {} : { notice: toast }}

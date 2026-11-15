@@ -576,8 +576,8 @@ function emitHostBundle(entryId) {
     // 窗口、1 小时报错窗口、两种写者的合并语义，都要能离线复现。
     'clearGenerateSnapshot', 'coerceGenerateError', 'coerceGenerateInflight', 'coerceGenerateSnapshot',
     'emptyGenerateSnapshot', 'GENERATE_SNAPSHOT_VERSION', 'GENERATE_STATE_KEY', 'loadGenerateBootRun',
-    'loadGenerateSnapshot', 'MAX_GENERATE_ERROR_MS', 'MAX_GENERATE_INTERRUPTED_MS', 'patchGenerateSnapshot',
-    'resolveGenerateBoot', 'saveGenerateSnapshot',
+    'loadGenerateSnapshot', 'MAX_GENERATE_ERROR_MS', 'MAX_GENERATE_INTERRUPTED_MS', 'MAX_GENERATE_OWNER',
+    'patchGenerateSnapshot', 'resolveGenerateBoot', 'resolveGenerateBootFor', 'saveGenerateSnapshot',
   ]
   const present = publicNames.filter(name => exported.has(name))
 

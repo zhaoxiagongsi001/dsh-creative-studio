@@ -181,9 +181,18 @@ export function ResultStage(props: ResultStageProps): React.JSX.Element {
           */
           <div className={`${css.stageInner} ${css.stageInnerErr}`}>
             <div className={css.errGlyph}><ErrorGlyphIcon /></div>
-            <div className={css.stageTitle}>生成失败</div>
+            {/*
+              标题与计费口径分两档（2026-11-15 复核指出）：
+              「请求发出去了但没等到结果」不能说是「生成失败」也不能承诺未计费 ——
+              上游很可能已经出图扣费，只是那张图没回到面板。
+            */}
+            <div className={css.stageTitle}>{run.billing === 'unknown' ? '这次没有拿到结果' : '生成失败'}</div>
             <div className={`${css.errCard} ${css.errCardWide}`}>{run.detail}</div>
-            <div className={css.stageDesc}>本次未计费。检查额度后可直接重试，提示词与参数已保留。</div>
+            <div className={css.stageDesc}>
+              {run.billing === 'unknown'
+                ? '请求可能已经发出，上游可能已计费，以账单为准。提示词与参数已保留，可直接重试。'
+                : '本次未计费。检查额度后可直接重试，提示词与参数已保留。'}
+            </div>
             <div className={css.genRow} style={{ justifyContent: 'center' }}>
               <button className={css.btn} type="button" onClick={props.onViewLog}>查看日志</button>
               <button className={css.btn} type="button" onClick={() => { void copyDetail() }}>

@@ -336,7 +336,11 @@ export type RunState =
   | { kind: 'idle' }
   | { kind: 'running'; startedAt: number }
   | { kind: 'done'; image: GeneratedImage }
-  | { kind: 'error'; message: string; detail: string }
+  /**
+   * `billing: 'unknown'` 用于「请求发出去了但没等到结果」（刷新/关窗打断）：
+   * 这种情况下上游可能已经出图并扣费，不能再断言「本次未计费」。
+   */
+  | { kind: 'error'; message: string; detail: string; billing?: 'unknown' }
 
 /** 生成失败时抛出的错误，携带面向用户的原始报错文本。 */
 export class GenerateError extends Error {

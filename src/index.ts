@@ -62,8 +62,10 @@ import {
   loadGenerateSnapshot,
   MAX_GENERATE_ERROR_MS,
   MAX_GENERATE_INTERRUPTED_MS,
+  MAX_GENERATE_OWNER,
   patchGenerateSnapshot,
   resolveGenerateBoot,
+  resolveGenerateBootFor,
   saveGenerateSnapshot,
 } from './generate/persist.ts'
 
@@ -1330,7 +1332,9 @@ export {
   loadGenerateSnapshot,
   MAX_GENERATE_ERROR_MS,
   MAX_GENERATE_INTERRUPTED_MS,
+  MAX_GENERATE_OWNER,
   patchGenerateSnapshot,
   resolveGenerateBoot,
+  resolveGenerateBootFor,
   saveGenerateSnapshot,
 }

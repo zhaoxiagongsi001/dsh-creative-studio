@@ -19,7 +19,7 @@
  * 心智模型：**一次生图是一次「下载」，不是一次「渲染」**——它属于页面，不属于面板。
  */
 import { createHttpBackend } from './api.ts'
-import { loadGenerateBootRun, patchGenerateSnapshot } from '../generate/persist.ts'
+import { loadGenerateSnapshot, patchGenerateSnapshot, resolveGenerateBootFor } from '../generate/persist.ts'
 import {
   GenerateError,
   type Backend,
@@ -30,6 +30,33 @@ import {
 
 /** 后端单例（与面板共用一份实现）。 */
 const backend: Backend = createHttpBackend()
+
+/** 页面实例 id 的存储键（sessionStorage：刷新保留、新标签页独立）。 */
+const OWNER_KEY = 'dsh-creative.generate.owner'
+
+/**
+ * 本页面实例的 id。
+ *
+ * 用来区分「本页上次没跑完」和「另一个标签页正在跑」——两者的存档长得一样，
+ * 但只有前者该显示「上次生成被中断」，后者显示中断会诱导用户再点一次重试，
+ * 变成两次付费请求。拿不到 sessionStorage 时给空串（按老行为处理）。
+ */
+function ownerOf(): string {
+  try {
+    const storage = (globalThis as { sessionStorage?: Storage }).sessionStorage
+    if (storage === undefined) return ''
+    const existing = storage.getItem(OWNER_KEY)
+    if (existing !== null && existing !== '') return existing.slice(0, 64)
+    const fresh = Math.random().toString(36).slice(2, 10) + Date.now().toString(36)
+    storage.setItem(OWNER_KEY, fresh)
+    return fresh
+  } catch {
+    return ''
+  }
+}
+
+/** 本次页面实例的 id。 */
+const owner = ownerOf()
 
 /** 当前状态（页面内唯一一份）。 */
 let current: RunState = hydrate()
@@ -53,15 +80,18 @@ let inflight: AbortController | undefined
  * 而不是反复倒计时的「上次生成被中断」。
  */
 function hydrate(): RunState {
-  const boot = loadGenerateBootRun()
+  const boot = resolveGenerateBootFor(loadGenerateSnapshot(), owner)
   if (boot.kind === 'error') {
-    return { kind: 'error', message: boot.failure.message, detail: boot.failure.detail }
+    return { kind: 'error', ...boot.failure }
   }
   if (boot.kind === 'interrupted') {
+    // 走到这里说明 owner 与本页一致（别人的 in-flight 已在 resolveGenerateBootFor 里滤掉）。
     const seconds = Math.max(1, Math.round(boot.elapsedMs / 1000))
     const failure = {
       message: '上次生成被中断',
       detail: `页面刷新或关闭打断了这次请求，图没有回来（已进行约 ${seconds} 秒）。提示词和参数还在面板上，点「重新生成」即可再跑一次。`,
+      // 请求已经发出去了，上游可能出了图也扣了费 —— 不能再承诺「本次未计费」。
+      billing: 'unknown' as const,
     }
     patchGenerateSnapshot({
       inflight: null,
@@ -128,7 +158,8 @@ export function startGenerate(config: PanelConfig, request: GenerateRequest): vo
   inflight = controller
   emit({ kind: 'running', startedAt })
   // 先落盘：页面若在跑的过程中被刷新，下一次挂载才知道「上次没跑完」。
-  patchGenerateSnapshot({ inflight: { startedAt, prompt: request.prompt }, error: null })
+  // owner 一起写：别的标签页读到它时才知道这是「别人的请求」，不该报中断。
+  patchGenerateSnapshot({ inflight: { startedAt, prompt: request.prompt, owner }, error: null })
 
   void (async () => {
     try {
@@ -147,7 +178,15 @@ export function startGenerate(config: PanelConfig, request: GenerateRequest): vo
       patchGenerateSnapshot({ inflight: null, error: null })
     } catch (error) {
       if (controller.signal.aborted) {
-        // 用户主动取消：回到空态，存档里连中断标记都不留（这是明确操作，不是意外）。
+        /**
+         * 用户主动取消：回到空态，存档里连中断标记都不留（这是明确操作，不是意外）。
+         *
+         * 但先认一下「这个 controller 还是当前在飞的那一个吗」：`cancelGenerate`
+         * 已经把自己的收尾做完了（emit idle + 清 inflight），此时若用户已经点了
+         * 新的生成，`inflight` 指向的是新 controller —— 这里再 emit idle 会把
+         * 新请求的 running 状态清掉。归属不符就直接退出。
+         */
+        if (inflight !== controller) return
         emit({ kind: 'idle' })
         patchGenerateSnapshot({ inflight: null })
         return
@@ -192,6 +231,18 @@ export function dismissGenerateError(): void {
   if (current.kind !== 'error') return
   emit({ kind: 'idle' })
   patchGenerateSnapshot({ error: null })
+}
+
+/**
+ * 收掉「已完成」的那张图。
+ *
+ * 清空历史时调用：done 是终态、不会自己回 idle，而完成回灌的 effect 会拿
+ * `run.image` 把舞台和 `lastImageId` 又摆回来（还顺手写回草稿盘）。清完历史
+ * 留一张孤儿图在舞台上，看起来像没清干净。把 done 收成 idle 即可。
+ */
+export function clearGeneratedStage(): void {
+  if (current.kind !== 'done') return
+  emit({ kind: 'idle' })
 }
 
 /** 供自检断言：把执行体复位成给定状态（只在测试里用）。 */

@@ -640,6 +640,18 @@ export function Composer(props: ComposerProps): React.JSX.Element {
   pickFileRef.current = pickFile
 
   /**
+   * 粘贴监听只挂一次，回调里读到的 props 会过期，所以把「会变的两样」放进 ref。
+   *
+   * - `onNotice`：面板传的是内联箭头函数（每次渲染都是新引用）。若写进依赖数组，
+   *   生成中每秒的 elapsed 重渲染都会 remove/add 一次 window paste 监听。
+   * - `references.length`：同理，加/删一张参考图就重装一次监听，没必要。
+   */
+  const noticeRef = useRef(props.onNotice)
+  noticeRef.current = props.onNotice
+  const refCountRef = useRef(props.references.length)
+  refCountRef.current = props.references.length
+
+  /**
    * 参考图支持 Ctrl+V 粘贴（2026-11-15，对齐反推工作区的选图入口）。
    *
    * 行为规则只有一条是新的：**剪贴板里同时带文字时不拦**。从网页 / Word 复制一段
@@ -669,7 +681,7 @@ export function Composer(props: ComposerProps): React.JSX.Element {
         // 剪贴板里确实有图，但 Chromium 没给出 File（常见于只带 <img> 的网页 HTML）。
         // 静默丢弃会被当成「快捷键坏了」，所以明确说一句。
         if (Array.from(data.types).some((type) => type.startsWith('image/'))) {
-          props.onNotice?.('剪贴板里的图读不出来，试试右键「复制图像」，或把图片拖进面板', 'err')
+          noticeRef.current?.('剪贴板里的图读不出来，试试右键「复制图像」，或把图片拖进面板', 'err')
         }
         return
       }
@@ -682,7 +694,7 @@ export function Composer(props: ComposerProps): React.JSX.Element {
       // 不 stopPropagation 的话同一张图会先被它拿走、视图被切回会话。
       event.stopPropagation()
       if (!canReference) {
-        props.onNotice?.(
+        noticeRef.current?.(
           props.notConfigured ? '配置生图服务后可粘贴参考图'
             : model === undefined ? '正在读取模型能力，稍后粘贴'
               : '当前模型不支持参考图',
@@ -691,25 +703,25 @@ export function Composer(props: ComposerProps): React.JSX.Element {
         return
       }
       if (overBudget) {
-        props.onNotice?.(`参考图总预算已满（${formatChars(MAX_REFERENCES_TOTAL_CHARS)}），先移除一张再粘贴`, 'err')
+        noticeRef.current?.(`参考图总预算已满（${formatChars(MAX_REFERENCES_TOTAL_CHARS)}），先移除一张再粘贴`, 'err')
         return
       }
-      const room = Math.max(0, refLimit - props.references.length)
+      const room = Math.max(0, refLimit - refCountRef.current)
       if (room === 0) {
-        props.onNotice?.(`参考图最多 ${refLimit} 张`, 'err')
+        noticeRef.current?.(`参考图最多 ${refLimit} 张`, 'err')
         return
       }
       // 一次只收放得下的张数：不让「每张各自看上限都通过、加起来超限」发生。
       const accepted = files.slice(0, room)
       if (accepted.length < files.length) {
-        props.onNotice?.(`剪贴板里有 ${files.length} 张图，本次只加了 ${accepted.length} 张（上限 ${refLimit} 张）`, 'err')
+        noticeRef.current?.(`剪贴板里有 ${files.length} 张图，本次只加了 ${accepted.length} 张（上限 ${refLimit} 张）`, 'err')
       }
       for (const file of accepted) void pickFileRef.current(file)
     }
     // 捕获阶段：抢在宿主的聊天输入框处理之前接住图片粘贴。
     window.addEventListener('paste', onPaste, true)
     return () => { window.removeEventListener('paste', onPaste, true) }
-  }, [canReference, model, props.notConfigured, refLimit, overBudget, props.onNotice, props.references.length])
+  }, [canReference, model, props.notConfigured, refLimit, overBudget])
 
   return (
     <section className={css.composer}>
