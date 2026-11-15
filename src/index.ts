@@ -47,6 +47,25 @@ import { parseReverseOutput } from './reverse/protocol.ts'
 import { inferType, matchCards } from './reverse/infer.ts'
 import { instructionsOf } from './reverse/rules.ts'
 import { coerceReverseOptions, coerceReverseSnapshot, coerceStoredImage, coerceStudioMode, defaultReverseOptions, REVERSE_IMAGE_KEY, REVERSE_SNAPSHOT_VERSION, REVERSE_STATE_KEY, STUDIO_MODE_KEY } from './reverse/persist.ts'
+// 生图运行态/报错的本地持久化收敛函数（2026-11-15）：与反推那套同形但不共用实现
+// （中断判定窗口不同：反推 6 小时、生图 30 分钟）。从宿主半边导出，供
+// `scripts/persist-check.mjs` 在 node 里断言「切走不丢、刷新留报错」的存档契约。
+import {
+  clearGenerateSnapshot,
+  coerceGenerateError,
+  coerceGenerateInflight,
+  coerceGenerateSnapshot,
+  emptyGenerateSnapshot,
+  GENERATE_SNAPSHOT_VERSION,
+  GENERATE_STATE_KEY,
+  loadGenerateBootRun,
+  loadGenerateSnapshot,
+  MAX_GENERATE_ERROR_MS,
+  MAX_GENERATE_INTERRUPTED_MS,
+  patchGenerateSnapshot,
+  resolveGenerateBoot,
+  saveGenerateSnapshot,
+} from './generate/persist.ts'
 
 /** 插件名。Cordis 用它做日志与去重标识。 */
 export const name = 'dsh-creative-studio'
@@ -1295,3 +1314,23 @@ export { explorerTarget, routeOf, activeModelOf, decodeDataUrl, parseReverseOutp
 // 反推状态的本地持久化（纯函数，不碰 DOM）：`scripts/persist-check.mjs` 要在 node 里
 // 断言「手改过 / 旧版本写脏的存档不会把面板搞崩」，所以从这里导出。
 export { coerceReverseOptions, coerceReverseSnapshot, coerceStoredImage, coerceStudioMode, defaultReverseOptions, REVERSE_IMAGE_KEY, REVERSE_SNAPSHOT_VERSION, REVERSE_STATE_KEY, STUDIO_MODE_KEY }
+// 生图状态的本地持久化（纯函数，不碰 DOM）：`scripts/persist-check.mjs` 断言
+// 「切走/刷新后不丢运行态与报错」这条契约靠的就是这些收敛函数与两个阈值。
+// 与反推那套一样，先 import 再从这里转出 —— 只写 `export … from` 的话，宿主半边的
+// 手写 bundler 不会把那个模块拉进产物（它只收集名字，不解析转发来源）。
+export {
+  clearGenerateSnapshot,
+  coerceGenerateError,
+  coerceGenerateInflight,
+  coerceGenerateSnapshot,
+  emptyGenerateSnapshot,
+  GENERATE_SNAPSHOT_VERSION,
+  GENERATE_STATE_KEY,
+  loadGenerateBootRun,
+  loadGenerateSnapshot,
+  MAX_GENERATE_ERROR_MS,
+  MAX_GENERATE_INTERRUPTED_MS,
+  patchGenerateSnapshot,
+  resolveGenerateBoot,
+  saveGenerateSnapshot,
+}

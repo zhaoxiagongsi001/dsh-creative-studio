@@ -24,15 +24,17 @@
  *  - **回归历史**：进面板时只看那一根引用，所以「点了一张老图 → 切走 → 回来」会回到
  *    **最后一次成功生成的那张**（不是刚才点开看的那张老图）。这是有意的：老板要的是
  *    「刚才生成的图还在」，而把「随手上翻的一张老图」也记成进面板的落点会让语义变糊。
- *  - **组件卸载要取消在飞请求**：用一个递增的 run token 判定「这次结果还算不算数」，
- *    同时用 AbortController 真的把 HTTP 请求掐掉（阶段 4 一次生成可能要 90 秒，
- *    「取消」必须真取消，不能只是不看结果）。
+ *  - **组件卸载 ≠ 取消生成**（2026-11-15 修）：请求与运行态都在 `generate-runner.ts`
+ *    （模块作用域）。切会话 / 切模式 / 重新挂载一律不打断，跑完与失败都写 localStorage，
+ *    回来时从运行态读到「还在跑 / 回来了 / 上次报什么错」。只有用户点「取消」才 abort
+ *    （阶段 4 一次生成可能要 90 秒，取消必须真取消，不能只是不看结果）。
  *  - 未配置时不给生成，但**提示词与参数仍然可编辑** —— 用户可以先写好再配。
  *  - **宿主路由不可用**（宿主半边没加载 / 端口不对）是一种独立状态：这时既不显示
  *    「还没配置」（那是误导），也不静默降级成假数据，而是明说哪里断了。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createHttpBackend } from './api.ts'
+import { cancelGenerate, dismissGenerateError, runnerState, startGenerate, subscribeRunner } from './generate-runner.ts'
 import { ArtDefs } from './art.tsx'
 import { Composer, GLOBAL_MAX_REFERENCES, prepareReference, referenceLimit, referencesRequired, type ParamState, type Reference } from './Composer.tsx'
 import { ConfigModal } from './ConfigModal.tsx'
@@ -42,7 +44,7 @@ import { DEFAULT_CONFIG } from './defaults.ts'
 import { HistoryMenu, ResultStage } from './ResultStage.tsx'
 import { LogViewer } from './LogViewer.tsx'
 import { fetchForgePreset, optimizePrompt } from './optimize.ts'
-import { GenerateError, type Backend, type GeneratedImage, type ImageParams, type ModelCapabilities, type ModelOption, type PanelConfig, type PanelDraft, type ParameterField, type RunState } from './types.ts'
+import { type Backend, type GeneratedImage, type ImageParams, type ModelCapabilities, type ModelOption, type PanelConfig, type PanelDraft, type ParameterField, type RunState } from './types.ts'
 import css from './panel.module.css'
 
 /**
@@ -384,6 +386,11 @@ const panelStore: PanelStore = {
   models: [],
 }
 
+/** 运行态 → 已跑秒数（非 running 一律 0）。切回来时秒表接着数，不从 0 重来。 */
+function runningElapsedSec(run: RunState): number {
+  return run.kind === 'running' ? Math.max(0, Math.round((Date.now() - run.startedAt) / 1000)) : 0
+}
+
 /**
  * 轻提示。错误提示停留更久（见下面那个定时器）。
  *
@@ -427,10 +434,21 @@ export function ImageGenPanel(): React.JSX.Element {
   )
   const [config, setConfig] = useState<PanelConfig | undefined>(panelStore.config)
   const [models, setModels] = useState<ModelOption[]>(panelStore.models)
-  const [run, setRun] = useState<RunState>({ kind: 'idle' })
+  /**
+   * 生图运行态：来自模块作用域的执行体（`generate-runner.ts`），**不是**本组件的 state。
+   *
+   * 2026-11-15 改造的全部理由都在这一行：面板卸载（切会话 / 切模式）后 request 仍在跑、
+   * 状态仍在执行体里；重新挂载时读到的就是真实状态 —— 还在跑就接着显示进度，
+   * 回来了就把那张图摆上舞台，失败了就还留着报错原文。
+   *
+   * 第三个参数是 SSR 快照（`render-check` 用 `renderToStaticMarkup` 直接渲染首帧）：
+   * 服务端没有订阅，读当前值即可，否则 React 会因为没有 getServerSnapshot 而抛错。
+   */
+  const run = useSyncExternalStore(subscribeRunner, runnerState, runnerState)
   const [configOpen, setConfigOpen] = useState(false)
   const [pulling, setPulling] = useState(false)
-  const [elapsedSec, setElapsedSec] = useState(0)
+  /** 阶段计时（秒）。初值按运行态的 `startedAt` 反推 —— 切回来时秒表不从 0 重数。 */
+  const [elapsedSec, setElapsedSec] = useState(() => runningElapsedSec(run))
   const [toast, setToast] = useState<Toast | undefined>(undefined)
   /** 宿主路由不可用时的原因（不是「未配置」）。 */
   const [hostError, setHostError] = useState<string | undefined>(undefined)
@@ -494,17 +512,6 @@ export function ImageGenPanel(): React.JSX.Element {
    * 当前模型不认的取值就会一直挂在界面上。铺草稿时把计数加一，让它补跑。
    */
   const [snapEpoch, setSnapEpoch] = useState(0)
-
-  /**
-   * 当前在飞的那次生成的 token。
-   *
-   * 卸载或取消时把它加一，回调据此判断自己是否已经过期 —— 配合下面的
-   * AbortController，既不看过期结果，也不让请求白跑。
-   */
-  const runToken = useRef(0)
-
-  /** 在飞的生成请求。取消/卸载时 abort。 */
-  const inFlight = useRef<AbortController | null>(null)
 
   /** 轻提示。 */
   const notify = useCallback((text: string, kind: Toast['kind'] = 'ok'): void => {
@@ -689,12 +696,43 @@ export function ImageGenPanel(): React.JSX.Element {
     if (draft !== undefined) void backend.saveDraft(draft)
   }, [])
 
-  // 卸载时作废在飞的请求，并把 HTTP 请求掐掉。
-  useEffect(() => () => {
-    runToken.current += 1
-    inFlight.current?.abort()
-    inFlight.current = null
-  }, [])
+  // 卸载**不再** abort 在飞生成（2026-11-15）：请求与状态都在 `generate-runner.ts`，
+  // 切会话 / 切模式只是卸载界面，不该让一次已经计费的生成白跑。只有「取消」会 abort。
+
+  /**
+   * 执行体完成一次生成 → 把结果搬进面板状态。
+   *
+   * 为什么不是 `generate()` 里直接 setState：执行体的寿命**长于本组件** —— 结果可能
+   * 是在面板卸载期间回来的。挂载时这个 effect 的第一跑就会把「已经完成、还没人接」
+   * 的那张图补上，所以切回来看到的是图，而不是一块空舞台。
+   *
+   * 按 `image.id` 去重：重挂载与宿主历史读回都可能带同一张图，重复合并会让历史里
+   * 出现两个同样的条目。
+   */
+  const appliedRunImage = useRef('')
+  useEffect(() => {
+    if (run.kind !== 'done') return
+    const image = run.image
+    if (appliedRunImage.current === image.id) return
+    appliedRunImage.current = image.id
+    // 同步写一份模块作用域：`applyDraft` 异步回来时用它判断「内存那份比磁盘新」。
+    panelStore.lastImageId = image.id
+    panelStore.lastGeneratedPrompt = image.prompt
+    const alreadyKnown = panelStore.history.some((item) => item.id === image.id)
+    setHistory((current) => current.some((item) => item.id === image.id) ? current : [image, ...current])
+    setPreviewId(image.id)
+    setLastImageId(image.id)
+    /**
+     * 用 `image.prompt`（那次生成真正的提示词），不是输入框现在的值 ——
+     * 生成途中用户可能已经改了草稿，拿当前值会把它错记成「上次成功生成用的那句」。
+     */
+    setLastGeneratedPrompt(image.prompt)
+    if (!alreadyKnown && image.count !== undefined && image.count > 1) {
+      notify(`已生成 ${image.count} 张，全部已保存（下方历史里可逐张查看）`)
+    }
+    // 重读一次历史：把 n>1 的其余几张、以及宿主的 autoSavedPath 一并带回来。
+    void refreshHistory()
+  }, [run, notify, refreshHistory])
 
   // 生成中每秒刷新计时。
   useEffect(() => {
@@ -815,7 +853,7 @@ export function ImageGenPanel(): React.JSX.Element {
 
   // --------------------------------------------------------------- 生成
 
-  const generate = useCallback(async (): Promise<void> => {
+  const generate = useCallback((): void => {
     if (config === undefined) return
     // 本地先拦掉两类「必被上游拒」的请求 —— 让用户看一句人话，而不是等 90 秒换回 502。
     if (modelCaps?.available === false) {
@@ -827,73 +865,32 @@ export function ImageGenPanel(): React.JSX.Element {
       notify(`「${config.model}」是改图专用模型，至少要给 ${needRefs} 张参考图`, 'err')
       return
     }
-    const token = ++runToken.current
-    // 前一次还在飞就先掐掉：同一时刻只允许一次生成。
-    inFlight.current?.abort()
-    const controller = new AbortController()
-    inFlight.current = controller
-
-    setRun({ kind: 'running', startedAt: Date.now() })
+    /**
+     * 请求交给执行体，不在本组件里 await（2026-11-15）。
+     *
+     * 执行体在模块作用域：面板卸载不打断、结果自己落盘、失败把原文留在存档里；
+     * 本组件只负责「把这一帧的参数交出去」和「订阅状态」（见上面的 useSyncExternalStore
+     * 与完成回灌 effect）。
+     */
+    startGenerate(config, {
+      prompt,
+      model: config.model,
+      aspectRatio: params.aspectRatio,
+      resolution: params.resolution,
+      count: Number(params.count) || 1,
+      quality: params.quality,
+      references: references.map((item) => item.dataUrl),
+      // 模型驱动表单收集的其它字段（`background` / `seed` / `size` / `stream` …）。
+      // 宿主会按同一份能力表再裁一次：这里给什么，它都要过一遍「该模型是否声明」
+      // 与「取值是否在枚举/区间内」，所以多给不会出错，只会被如实记进 `dropped`。
+      ...Object.keys(extra).length === 0 ? {} : { extra },
+    })
     setElapsedSec(0)
-
-    try {
-      const image = await backend.generate(config, {
-        prompt,
-        model: config.model,
-        aspectRatio: params.aspectRatio,
-        resolution: params.resolution,
-        count: Number(params.count) || 1,
-        quality: params.quality,
-        references: references.map((item) => item.dataUrl),
-        // 模型驱动表单收集的其它字段（`background` / `seed` / `size` / `stream` …）。
-        // 宿主会按同一份能力表再裁一次：这里给什么，它都要过一遍「该模型是否声明」
-        // 与「取值是否在枚举/区间内」，所以多给不会出错，只会被如实记进 `dropped`。
-        ...Object.keys(extra).length === 0 ? {} : { extra },
-      }, controller.signal)
-      if (runToken.current !== token) return
-      setHistory((current) => [image, ...current])
-      setPreviewId(image.id)
-      /**
-       * 记下「最后一次成功生成的是哪张」。
-       *
-       * 它就是**舞台恢复**的判据：切到会话再回来（面板重新挂载）、甚至重启 DSH，
-       * 舞台上摆的都是这张。跟着草稿一起落盘（400 ms 防抖），所以「刚出图就切走」
-       * 也不会丢 —— 内存那份比磁盘新，见 applyDraft。
-       */
-      setLastImageId(image.id)
-      setRun({ kind: 'done', image })
-      /**
-       * 记下「最后一次成功生成用的是哪句提示词」。
-       *
-       * 它就是进面板时那条规则的判据：提示词框里的话**等于**它 = 上次已经生成过了，
-       * 下次进来给一块空面板；**不等于**它 = 这是一份没生成过的草稿，得留着。
-       *
-       * 注意这里**不清空输入框** —— 刚出图就把提示词抹掉，用户想微调后「重新生成」
-       * 还得重敲一遍。清空只发生在**下一次进入面板**时（见 applyDraft）。
-       */
-      setLastGeneratedPrompt(prompt)
-      if (image.count !== undefined && image.count > 1) {
-        notify(`已生成 ${image.count} 张，全部已保存（下方历史里可逐张查看）`)
-      }
-      // 重读一次历史：把 n>1 的其余几张、以及宿主的 autoSavedPath 一并带回来。
-      void refreshHistory()
-    } catch (error) {
-      if (runToken.current !== token) return
-      if (error instanceof GenerateError) {
-        setRun({ kind: 'error', message: error.message, detail: error.detail })
-      } else {
-        setRun({ kind: 'error', message: '生成失败', detail: String(error) })
-      }
-    } finally {
-      if (inFlight.current === controller) inFlight.current = null
-    }
-  }, [config, modelCaps, model, references, prompt, params, extra, notify, refreshHistory])
+  }, [config, modelCaps, model, references, prompt, params, extra, notify])
 
   const cancel = useCallback((): void => {
-    runToken.current += 1
-    inFlight.current?.abort()
-    inFlight.current = null
-    setRun({ kind: 'idle' })
+    cancelGenerate()
+    setElapsedSec(0)
     notify('已取消')
   }, [notify])
 
@@ -915,7 +912,8 @@ export function ImageGenPanel(): React.JSX.Element {
     setPreviewId(image.id)
     // 上一次是报错时，舞台正显示着错误卡片 —— 点了历史图却什么都没变，看着像坏了。
     // 报错态让位给「看这张图」；**生成中不动**（那会儿进度和「取消」比看图重要）。
-    setRun((current) => (current.kind === 'error' ? { kind: 'idle' } : current))
+    // 运行态在模块作用域的执行体里，所以走 dismissGenerateError()，不能直接 setState。
+    dismissGenerateError()
     if (prompt.trim() !== '' && prompt !== image.prompt) setUndoPrompt(prompt)
     setPrompt(image.prompt)
 

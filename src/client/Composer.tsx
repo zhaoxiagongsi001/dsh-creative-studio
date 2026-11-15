@@ -7,7 +7,7 @@
  *   - 生成中时主按钮换成「取消」，且提示词与参数保持可读（用户要能看着改）。
  *   - 参考图只接受图片；超过上限直接拒绝并提示，不静默丢弃。
  */
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { CheckIcon, ChevronIcon, GearIcon, InfoIcon, ListIcon, PlusIcon, SparkIcon, StopIcon, WarnIcon } from './icons.tsx'
 import type { ModelOption, OutputFormat, ParameterField } from './types.ts'
 import css from './panel.module.css'
@@ -459,9 +459,15 @@ export function Composer(props: ComposerProps): React.JSX.Element {
    * 为什么生成按钮点不动。
    */
   const refHint = (): string => {
-    if (props.notConfigured) return '配置后可上传'
-    if (model === undefined) return '模型加载中…'
-    if (!model.supportsReferences) return '当前模型不支持'
+    /**
+     * 粘贴入口与模型能力**无关**：只要这个框在，剪贴板里有图就能粘进来
+     * （见下面的 paste 监听）。所以它挂在每个分支的尾巴上 —— 连「还没配好」
+     * 也照样告诉用户入口在哪，而不是等他配完才发现能粘。
+     */
+    const paste = ' · Ctrl+V 粘贴'
+    if (props.notConfigured) return `配置后可上传${paste}`
+    if (model === undefined) return `模型加载中…${paste}`
+    if (!model.supportsReferences) return `当前模型不支持${paste}`
     const tally = `${props.references.length}/${refLimit}`
     // 「模型声明了 20 张、接口只收 16 张」必须说出来，否则计数器显示 0/16
     // 会被当成「这个模型只有 16 张额度」，用户不知道为什么加不进第 17 张。
@@ -472,8 +478,8 @@ export function Composer(props: ComposerProps): React.JSX.Element {
     const size = props.references.length === 0
       ? ''
       : ` · ${formatChars(usedChars)}/${formatChars(MAX_REFERENCES_TOTAL_CHARS)}`
-    if (refRequired) return `必填 · 至少 ${model.references?.min ?? 1} 张（${tally}）${size}${clamped}`
-    return `可多张 · 图生图（${tally}）${size}${clamped}`
+    if (refRequired) return `必填 · 至少 ${model.references?.min ?? 1} 张（${tally}）${size}${clamped}${paste}`
+    return `可多张 · 图生图（${tally}）${size}${clamped}${paste}`
   }
 
   // 参数行**由所选模型的参数表驱动**：模型声明了什么就显示什么。
@@ -623,6 +629,87 @@ export function Composer(props: ComposerProps): React.JSX.Element {
     }
     props.onAddReference(file.name, prepared.dataUrl, prepared.note === '' ? undefined : prepared.note)
   }
+
+  /**
+   * 最新的 pickFile（每次渲染刷新）。
+   *
+   * 粘贴监听只挂一次（空依赖），但那次的闭包捕获的是**当时的** props.references
+   * 与预算 —— 连粘两张时第二张会按旧的上限判断。ref 让监听永远拿到最新那份。
+   */
+  const pickFileRef = useRef(pickFile)
+  pickFileRef.current = pickFile
+
+  /**
+   * 参考图支持 Ctrl+V 粘贴（2026-11-15，对齐反推工作区的选图入口）。
+   *
+   * 行为规则只有一条是新的：**剪贴板里同时带文字时不拦**。从网页 / Word 复制一段
+   * 图文，用户要的是那段文字；preventDefault 会把它吞掉，图也没进参考图槽。
+   * 截图（只有 image/png）与「右键复制图片」才是这里要接住的输入。
+   *
+   * 取图两级兜底：先 items 里的 file，再 files（少数来源只填后者）；两级都空但
+   * types 里确实有图时给一句提示 —— 静默返回会被当成「快捷键坏了」。
+   */
+  useEffect(() => {
+    const onPaste = (event: ClipboardEvent): void => {
+      const data = event.clipboardData
+      if (data === null) return
+      const files: File[] = []
+      for (const item of Array.from(data.items)) {
+        if (item.kind !== 'file' || !item.type.startsWith('image/')) continue
+        const file = item.getAsFile()
+        if (file !== null) files.push(file)
+      }
+      // 有些来源（部分录屏/截图工具、终端）把图塞在 files 而不是 items 里，补一遍。
+      if (files.length === 0) {
+        for (const file of Array.from(data.files ?? [])) {
+          if (file.type.startsWith('image/')) files.push(file)
+        }
+      }
+      if (files.length === 0) {
+        // 剪贴板里确实有图，但 Chromium 没给出 File（常见于只带 <img> 的网页 HTML）。
+        // 静默丢弃会被当成「快捷键坏了」，所以明确说一句。
+        if (Array.from(data.types).some((type) => type.startsWith('image/'))) {
+          props.onNotice?.('剪贴板里的图读不出来，试试右键「复制图像」，或把图片拖进面板', 'err')
+        }
+        return
+      }
+      // 图文混排：文字优先（只有文字非空才算），让浏览器把文字照常落进输入框。
+      // 用 getData 而不是 types.includes：剪贴板常年携带一个空的 text/plain 槽，
+      // 拿它拦会把纯截图也一起拦掉。
+      if (data.getData('text/plain') !== '') return
+      event.preventDefault()
+      // 捕获阶段就把图片粘贴吞掉：宿主在 document 上还有一层 paste 处理（聊天输入框），
+      // 不 stopPropagation 的话同一张图会先被它拿走、视图被切回会话。
+      event.stopPropagation()
+      if (!canReference) {
+        props.onNotice?.(
+          props.notConfigured ? '配置生图服务后可粘贴参考图'
+            : model === undefined ? '正在读取模型能力，稍后粘贴'
+              : '当前模型不支持参考图',
+          'err',
+        )
+        return
+      }
+      if (overBudget) {
+        props.onNotice?.(`参考图总预算已满（${formatChars(MAX_REFERENCES_TOTAL_CHARS)}），先移除一张再粘贴`, 'err')
+        return
+      }
+      const room = Math.max(0, refLimit - props.references.length)
+      if (room === 0) {
+        props.onNotice?.(`参考图最多 ${refLimit} 张`, 'err')
+        return
+      }
+      // 一次只收放得下的张数：不让「每张各自看上限都通过、加起来超限」发生。
+      const accepted = files.slice(0, room)
+      if (accepted.length < files.length) {
+        props.onNotice?.(`剪贴板里有 ${files.length} 张图，本次只加了 ${accepted.length} 张（上限 ${refLimit} 张）`, 'err')
+      }
+      for (const file of accepted) void pickFileRef.current(file)
+    }
+    // 捕获阶段：抢在宿主的聊天输入框处理之前接住图片粘贴。
+    window.addEventListener('paste', onPaste, true)
+    return () => { window.removeEventListener('paste', onPaste, true) }
+  }, [canReference, model, props.notConfigured, refLimit, overBudget, props.onNotice, props.references.length])
 
   return (
     <section className={css.composer}>

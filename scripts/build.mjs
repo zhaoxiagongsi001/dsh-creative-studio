@@ -571,6 +571,13 @@ function emitHostBundle(entryId) {
     // 运行态判定与「只改一部分」的合并写：2026-11-08 修「切走即取消」时新增，
     // persist-check 要断言中断/失败/成功三态的优先级，以及两个写者不会互相抹字段。
     'resolveBootRun', 'loadReverseBootRun', 'patchReverseSnapshot', 'emptyReverseSnapshot', 'MAX_INTERRUPTED_MS',
+    // 生图运行态/报错的本地持久化（2026-11-15）：persist-check 断言「切走不丢、
+    // 刷新后把中断变成一条留着原文的报错」这条契约 —— 收敛垃圾存档、30 分钟中断
+    // 窗口、1 小时报错窗口、两种写者的合并语义，都要能离线复现。
+    'clearGenerateSnapshot', 'coerceGenerateError', 'coerceGenerateInflight', 'coerceGenerateSnapshot',
+    'emptyGenerateSnapshot', 'GENERATE_SNAPSHOT_VERSION', 'GENERATE_STATE_KEY', 'loadGenerateBootRun',
+    'loadGenerateSnapshot', 'MAX_GENERATE_ERROR_MS', 'MAX_GENERATE_INTERRUPTED_MS', 'patchGenerateSnapshot',
+    'resolveGenerateBoot', 'saveGenerateSnapshot',
   ]
   const present = publicNames.filter(name => exported.has(name))
 

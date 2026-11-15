@@ -210,6 +210,9 @@ checkNotContains(panel, 'undefined', '首帧没有把 undefined 渲染进文本'
 const imagePane = render(h(clientExports.ImageGenPanel), 'ImageGenPanel')
 checkContains(imagePane, '提示词', '生图面板：提示词输入区')
 checkContains(imagePane, '参考图', '生图面板：参考图槽')
+// 2026-11-15：参考图支持直接 Ctrl+V 粘贴（老板需求 2）。提示文案必须真的渲染出来 ——
+// 粘贴监听挂没挂这里测不到（SSR 不跑 effect），但「用户看得见入口」是能断言的。
+checkContains(imagePane, 'Ctrl+V 粘贴', '生图面板：参考图区提示支持 Ctrl+V 粘贴')
 checkContains(imagePane, '历史记录', '生图面板：历史条')
 checkContains(imagePane, '连接配置', '生图面板：连接配置入口')
 

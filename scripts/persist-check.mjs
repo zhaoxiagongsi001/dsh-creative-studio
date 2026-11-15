@@ -262,6 +262,137 @@ equals('patch：后写结果不影响已写参数', merged.options.dialect, 'qwe
 equals('patch：参数写入不抹掉结果', merged.result?.type, '人像 · 写真')
 equals('patch：结果写入后中断标记被清掉', merged.inflight, null)
 
+// ============================================================ 生图运行态与报错（2026-11-15）
+//
+// 契约：生图中切走会卸载面板，但**请求与状态在模块作用域的执行体里**，所以切回来
+// 必须还是「正在跑」；刷新/关窗会打断请求，那一次要变成一条**留着原文的报错**，
+// 而不是安静地回到空面板。下面断言的就是这条契约的存档一侧：收敛、过期、优先级。
+
+console.log('\n[生图：存档收敛与过期判定]')
+const {
+  coerceGenerateSnapshot,
+  coerceGenerateInflight,
+  coerceGenerateError,
+  emptyGenerateSnapshot,
+  resolveGenerateBoot,
+  patchGenerateSnapshot,
+  loadGenerateSnapshot,
+  loadGenerateBootRun,
+  saveGenerateSnapshot,
+  GENERATE_STATE_KEY,
+  GENERATE_SNAPSHOT_VERSION,
+  MAX_GENERATE_INTERRUPTED_MS,
+  MAX_GENERATE_ERROR_MS,
+} = mod
+
+equals('生图存档键名固定（改键名 = 老数据全丢）', GENERATE_STATE_KEY, 'dsh-creative.generate.state.v1')
+equals('生图存档版本号', GENERATE_SNAPSHOT_VERSION, 1)
+equals('中断判定窗口是 30 分钟', MAX_GENERATE_INTERRUPTED_MS, 30 * 60 * 1000)
+equals('报错保留窗口是 1 小时', MAX_GENERATE_ERROR_MS, 60 * 60 * 1000)
+
+check('非对象返回 undefined（按没有存档处理）', coerceGenerateSnapshot('nonsense') === undefined)
+check('null 返回 undefined', coerceGenerateSnapshot(null) === undefined)
+equals('空对象版本号被写回', coerceGenerateSnapshot({}).version, GENERATE_SNAPSHOT_VERSION)
+check('空对象没有在飞标记', coerceGenerateSnapshot({}).inflight === null)
+check('空对象没有报错', coerceGenerateSnapshot({}).error === null)
+equals('数组当空存档收敛（不炸）', coerceGenerateSnapshot([]).inflight, null)
+
+equals('inflight 缺 startedAt 当没有', coerceGenerateInflight({ prompt: 'x' }), null)
+equals('inflight startedAt 非法当没有', coerceGenerateInflight({ startedAt: 'abc' }), null)
+equals('inflight startedAt 为 0 当没有', coerceGenerateInflight({ startedAt: 0 }), null)
+equals('inflight 认数字字符串（手改 JSON 常见）', coerceGenerateInflight({ startedAt: '1700000000000', prompt: 'p' }), { startedAt: 1700000000000, prompt: 'p' })
+equals('inflight 提示词超长截断', coerceGenerateInflight({ startedAt: 1, prompt: 'x'.repeat(30000) }).prompt.length, 20000)
+
+equals('error 两段都空当没有', coerceGenerateError({ message: '   ', detail: '' }), null)
+equals('error 只有 detail 时标题兜底', coerceGenerateError({ detail: 'boom' }).message, '生成失败')
+equals('error 标题超长截断', coerceGenerateError({ message: 'x'.repeat(999), detail: 'd' }).message.length, 500)
+equals('error 原文超长截断', coerceGenerateError({ message: 'm', detail: 'x'.repeat(30000) }).detail.length, 20000)
+equals('error 带上那次生成用的提示词', coerceGenerateError({ message: 'm', detail: 'd', prompt: '一只猫', at: 1000 }).prompt, '一只猫')
+
+const genSnap = (patch) => ({ ...emptyGenerateSnapshot(), ...patch })
+equals('没有存档 → 空态', resolveGenerateBoot(undefined).kind, 'idle')
+equals(
+  '有在飞标记 → 中断态（不是空面板）',
+  resolveGenerateBoot(genSnap({ inflight: { startedAt: 1000, prompt: '一只猫' } }), 61_000).kind,
+  'interrupted',
+)
+equals(
+  '中断态带真实已用毫秒',
+  resolveGenerateBoot(genSnap({ inflight: { startedAt: 1000, prompt: '一只猫' } }), 61_000).elapsedMs,
+  60_000,
+)
+equals(
+  '中断态带回提示词（「重新生成」要能直接重跑）',
+  resolveGenerateBoot(genSnap({ inflight: { startedAt: 1000, prompt: '一只猫' } }), 61_000).prompt,
+  '一只猫',
+)
+equals(
+  '太久的中断标记当没有（30 分钟后不再弹吓人的中断提示）',
+  resolveGenerateBoot(genSnap({ inflight: { startedAt: 1000, prompt: 'x' } }), 1000 + MAX_GENERATE_INTERRUPTED_MS + 1).kind,
+  'idle',
+)
+equals(
+  '时间戳落在未来（时钟回拨）也当没有',
+  resolveGenerateBoot(genSnap({ inflight: { startedAt: 999_000, prompt: 'x' } }), 1000).kind,
+  'idle',
+)
+equals(
+  '有在飞标记时**优先**判中断（即使同时留着上次报错）',
+  resolveGenerateBoot(genSnap({
+    inflight: { startedAt: 61_000, prompt: 'x' },
+    error: { message: '旧报错', detail: '', prompt: 'y', at: 60_000 },
+  }), 61_500).kind,
+  'interrupted',
+)
+equals(
+  '1 小时内的报错 → 报错态（切回来还看得见原文）',
+  resolveGenerateBoot(genSnap({ error: { message: '生成失败', detail: '(code: upstream_timeout)', prompt: '一只猫', at: 1_000_000 } }), 1_000_000 + 60_000).kind,
+  'error',
+)
+equals(
+  '报错态把原文与提示词一起带回',
+  resolveGenerateBoot(genSnap({ error: { message: '生成失败', detail: 'detail', prompt: '一只猫', at: 1_000_000 } }), 1_000_000).failure.detail,
+  'detail',
+)
+equals(
+  '超过 1 小时的报错不再糊在舞台上',
+  resolveGenerateBoot(genSnap({ error: { message: '生成失败', detail: 'd', prompt: 'x', at: 1_000_000 } }), 1_000_000 + MAX_GENERATE_ERROR_MS + 1).kind,
+  'idle',
+)
+
+console.log('\n[生图：存取往返]')
+store.clear()
+check('写成功', saveGenerateSnapshot({
+  version: GENERATE_SNAPSHOT_VERSION,
+  inflight: { startedAt: 50_000, prompt: '一只穿风衣的猫' },
+  error: null,
+  updatedAt: 1,
+}) === true)
+const genLoaded = loadGenerateSnapshot()
+equals('往返：在飞标记保住', genLoaded.inflight, { startedAt: 50_000, prompt: '一只穿风衣的猫' })
+equals('往返：没有报错', genLoaded.error, null)
+
+// 两个写者（执行体写 inflight/error，加载时读）互不抹掉
+patchGenerateSnapshot({ inflight: null, error: { message: '生成失败', detail: '上游超时', prompt: '一只猫', at: 2_000_000 } })
+const genPatched = loadGenerateSnapshot()
+equals('patch：清 inflight 后报错写进去了', genPatched.error.message, '生成失败')
+equals('patch：报错原文保住', genPatched.error.detail, '上游超时')
+patchGenerateSnapshot({ inflight: { startedAt: 3_000_000, prompt: '再试一次' } })
+equals('patch：新一次在飞不被旧报错顶掉', loadGenerateSnapshot().inflight.startedAt, 3_000_000)
+
+// 手改坏 JSON：不能抛，按空存档处理
+store.set(GENERATE_STATE_KEY, '{ 这不是 JSON')
+const genBroken = loadGenerateSnapshot()
+check('坏 JSON 不抛且当空存档', genBroken.inflight === null && genBroken.error === null)
+equals('坏 JSON 的启动态是空态', loadGenerateBootRun(1_000).kind, 'idle')
+
+// 存储被禁用（隐私模式）：写返回 false、读给空态，面板照常可用
+const savedAgain = globalThis.localStorage
+delete globalThis.localStorage
+check('没有 localStorage 时写返回 false', saveGenerateSnapshot(emptyGenerateSnapshot()) === false)
+equals('没有 localStorage 时启动态是空态', loadGenerateBootRun(1_000).kind, 'idle')
+globalThis.localStorage = savedAgain
+
 // ============================================================ 结论
 
 console.log('')
