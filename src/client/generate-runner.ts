@@ -19,7 +19,13 @@
  * 心智模型：**一次生图是一次「下载」，不是一次「渲染」**——它属于页面，不属于面板。
  */
 import { createHttpBackend } from './api.ts'
-import { loadGenerateSnapshot, patchGenerateSnapshot, resolveGenerateBootFor } from '../generate/persist.ts'
+import {
+  clearGenerateSnapshot,
+  loadGenerateSnapshot,
+  patchGenerateSnapshot,
+  resolveGenerateBoot,
+  resolveGenerateBootFor,
+} from '../generate/persist.ts'
 import {
   GenerateError,
   type Backend,
@@ -80,7 +86,8 @@ let inflight: AbortController | undefined
  * 而不是反复倒计时的「上次生成被中断」。
  */
 function hydrate(): RunState {
-  const boot = resolveGenerateBootFor(loadGenerateSnapshot(), owner)
+  const snapshot = loadGenerateSnapshot()
+  const boot = resolveGenerateBootFor(snapshot, owner)
   if (boot.kind === 'error') {
     return { kind: 'error', ...boot.failure }
   }
@@ -98,6 +105,12 @@ function hydrate(): RunState {
       error: { ...failure, prompt: boot.prompt, at: Date.now() },
     })
     return { kind: 'error', ...failure }
+  }
+  // 存档里躺着已过期（或属于别的标签页）的 inflight / 旧报错时顺手清掉：
+  // 它们不会再影响任何界面判断（resolveGenerateBoot 已把它们判成过期），
+  // 留着只会让 localStorage 一直背着一条永远用不上的旧记录。
+  if (resolveGenerateBoot(snapshot).kind === 'idle' && (snapshot.inflight !== null || snapshot.error !== null)) {
+    clearGenerateSnapshot()
   }
   return { kind: 'idle' }
 }

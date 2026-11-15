@@ -578,6 +578,9 @@ function emitHostBundle(entryId) {
     'emptyGenerateSnapshot', 'GENERATE_SNAPSHOT_VERSION', 'GENERATE_STATE_KEY', 'loadGenerateBootRun',
     'loadGenerateSnapshot', 'MAX_GENERATE_ERROR_MS', 'MAX_GENERATE_INTERRUPTED_MS', 'MAX_GENERATE_OWNER',
     'patchGenerateSnapshot', 'resolveGenerateBoot', 'resolveGenerateBootFor', 'saveGenerateSnapshot',
+    // 剪贴板粘贴解析（2026-11-15）：paste 事件在离线自检里触发不了，所以取图规则
+    // 抽成纯函数，由 paste-check 用假 clipboardData 断言「两级兜底 / 图文混排让文字优先」。
+    'readPasteImages',
   ]
   const present = publicNames.filter(name => exported.has(name))
 

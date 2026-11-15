@@ -68,6 +68,8 @@ import {
   resolveGenerateBootFor,
   saveGenerateSnapshot,
 } from './generate/persist.ts'
+// 剪贴板解析是纯函数，放 shared/ 供客户端调、也供 node 自检断言（scripts/paste-check.mjs）。
+import { readPasteImages } from './shared/paste.ts'
 
 /** 插件名。Cordis 用它做日志与去重标识。 */
 export const name = 'dsh-creative-studio'
@@ -1338,3 +1340,4 @@ export {
   resolveGenerateBootFor,
   saveGenerateSnapshot,
 }
+export { readPasteImages }

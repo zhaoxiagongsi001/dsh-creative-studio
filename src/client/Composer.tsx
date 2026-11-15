@@ -10,6 +10,7 @@
 import { useEffect, useRef } from 'react'
 import { CheckIcon, ChevronIcon, GearIcon, InfoIcon, ListIcon, PlusIcon, SparkIcon, StopIcon, WarnIcon } from './icons.tsx'
 import type { ModelOption, OutputFormat, ParameterField } from './types.ts'
+import { readPasteImages } from '../shared/paste.ts'
 import css from './panel.module.css'
 
 /**
@@ -743,30 +744,19 @@ export function Composer(props: ComposerProps): React.JSX.Element {
     const onPaste = (event: ClipboardEvent): void => {
       const data = event.clipboardData
       if (data === null) return
-      const files: File[] = []
-      for (const item of Array.from(data.items)) {
-        if (item.kind !== 'file' || !item.type.startsWith('image/')) continue
-        const file = item.getAsFile()
-        if (file !== null) files.push(file)
-      }
-      // 有些来源（部分录屏/截图工具、终端）把图塞在 files 而不是 items 里，补一遍。
-      if (files.length === 0) {
-        for (const file of Array.from(data.files ?? [])) {
-          if (file.type.startsWith('image/')) files.push(file)
-        }
-      }
-      if (files.length === 0) {
+      // 取图规则抽在 shared/paste.ts：items → files 两级兜底、图文混排让文字优先，
+      // 都在那边做，并且有离线断言（scripts/paste-check.mjs）。
+      const read = readPasteImages<File>(data)
+      if (read.files.length === 0) {
         // 剪贴板里确实有图，但 Chromium 没给出 File（常见于只带 <img> 的网页 HTML）。
         // 静默丢弃会被当成「快捷键坏了」，所以明确说一句。
-        if (Array.from(data.types).some((type) => type.startsWith('image/'))) {
+        if (read.unreadable) {
           noticeRef.current?.('剪贴板里的图读不出来，试试右键「复制图像」，或把图片拖进面板', 'err')
         }
         return
       }
-      // 图文混排：文字优先（只有文字非空才算），让浏览器把文字照常落进输入框。
-      // 用 getData 而不是 types.includes：剪贴板常年携带一个空的 text/plain 槽，
-      // 拿它拦会把纯截图也一起拦掉。
-      if (data.getData('text/plain') !== '') return
+      // 图文混排：文字优先，让浏览器把文字照常落进输入框。
+      if (read.hasText) return
       event.preventDefault()
       // 捕获阶段就把图片粘贴吞掉：宿主在 document 上还有一层 paste 处理（聊天输入框），
       // 不 stopPropagation 的话同一张图会先被它拿走、视图被切回会话。
