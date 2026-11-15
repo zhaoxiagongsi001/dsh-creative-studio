@@ -581,6 +581,9 @@ function emitHostBundle(entryId) {
     // 剪贴板粘贴解析（2026-11-15）：paste 事件在离线自检里触发不了，所以取图规则
     // 抽成纯函数，由 paste-check 用假 clipboardData 断言「两级兜底 / 图文混排让文字优先」。
     'readPasteImages',
+    // 计费口径判定（2026-11-15）：错误卡片写「本次未计费」还是「以账单为准」，
+    // 由 persist-check 钉死哪几类宿主 code 属于「可能已计费」。
+    'billingOfCode',
   ]
   const present = publicNames.filter(name => exported.has(name))
 

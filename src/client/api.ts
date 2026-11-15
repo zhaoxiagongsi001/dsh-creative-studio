@@ -14,6 +14,7 @@
  *      那句 message —— 面板把它显示给用户，不做二次美化。
  */
 import { DEFAULT_CONFIG } from './defaults.ts'
+import { billingOfCode } from '../shared/billing.ts'
 import {
   GenerateError,
   type ActiveModelResult,
@@ -159,18 +160,6 @@ async function callHost(route: string, init?: RequestInit): Promise<Record<strin
 }
 
 // -------------------------------------------------------------- 响应收敛
-
-/**
- * 这些 code 表示「请求已经发出去，但没拿到结果」。
- *
- * 宿主侧：`timeout`（等上游超时，504）、`upstream`（上游 5xx / 连接失败）、
- * `aborted`（请求被中断）、`network`（连不上宿主）、`unknown` / `bad-shape`
- * （响应读不懂）。上游都可能在断开前已经出图并扣费，所以面板不能再说「本次未计费」。
- *
- * 反过来，`empty-prompt`、`bad-model`、`forbidden`（401/403）这类前置校验失败
- * 一定没发到上游，保留「本次未计费」这句才是对的。
- */
-const BILLING_UNKNOWN_CODES = new Set(['timeout', 'upstream', 'aborted', 'network', 'unknown', 'bad-shape'])
 
 /** 取字符串字段，缺省时回退。 */
 function asString(value: unknown, fallback: string): string {
@@ -559,7 +548,8 @@ export function createHttpBackend(): Backend {
         })
         const image = toImage(body.image)
         if (image === undefined) {
-          throw new GenerateError('生成失败', '宿主返回的图片结构不完整（缺少 id）')
+          // 宿主回了 200 但结构读不懂：请求确实发出去了，上游可能已出图计费。
+          throw new GenerateError('生成失败', '宿主返回的图片结构不完整（缺少 id）', 'unknown')
         }
         const count = typeof body.count === 'number' && Number.isFinite(body.count) ? body.count : 1
         return {
@@ -579,7 +569,8 @@ export function createHttpBackend(): Backend {
         }
         // 这几类 code 表示请求已经发出去了（只是没拿到结果），上游可能已扣费；
         // 面板据此把「本次未计费」换成「以账单为准」，不要给出错误的账单承诺。
-        throw new GenerateError('生成失败', lines.join('\n'), BILLING_UNKNOWN_CODES.has(code) ? 'unknown' : undefined)
+        // 判定表在 shared/billing.ts，有离线断言（scripts/persist-check.mjs）。
+        throw new GenerateError('生成失败', lines.join('\n'), billingOfCode(code))
       }
     },
 

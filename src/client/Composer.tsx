@@ -677,6 +677,10 @@ export function Composer(props: ComposerProps): React.JSX.Element {
    * 预算与张数都从 ref 读最新值（`usedChars` 可能是挂载那一刻的旧值）；
    * 收下的文件立刻计入 `reservedRef`，同一批的后几张不会重复占用同一份额度。
    * 遇到单个超大文件用 continue 跳过而不是 break：挡住后面更小的图没有道理。
+   *
+   * `size * 4 / 3` 只是**初筛**，不是上界：WebP/AVIF 转 PNG、或小图被放大重编码后，
+   * data URL 可能远大于原始字节的 4/3。真正的 20MB 闸门在 `pickFile` 里 ——
+   * 每张 `prepareReference()` 完成后用**实际** chars 和当时剩余预算再复核一次。
    */
   const fitToBudget = (files: File[], room: number): File[] => {
     let left = MAX_REFERENCES_TOTAL_CHARS - usedCharsRef.current - reservedRef.current
@@ -715,15 +719,27 @@ export function Composer(props: ComposerProps): React.JSX.Element {
       return
     }
     if (accepted.length < files.length) {
+      // 部分成功用普通提示色：图确实加进来了，不该用报错的红色吓人。
       noticeRef.current?.(
         `收到 ${files.length} 张，本次只加了 ${accepted.length} 张（受张数上限 ${refLimit} 张或总预算限制）`,
-        'err',
+        'ok',
       )
     }
+    // 只回滚本批预留：两批粘贴接连发生时，整表清零会把另一批还没用掉的额度也抹掉。
+    const before = reservedRef.current
     try {
-      for (const file of accepted) await pickFileRef.current(file)
+      for (const file of accepted) {
+        // `pickFile` 的读文件 / 重编码步骤可能抛（损坏的图、内存不足）。
+        // 单张失败不该连累这一批的其它张，更不能变成未处理的 Promise 拒绝。
+        try {
+          await pickFileRef.current(file)
+        } catch (error) {
+          console.warn('[dsh-creative-studio] 读取参考图失败：', error)
+          noticeRef.current?.(`「${file.name || '剪贴板图片'}」读不出来，换一张试试`, 'err')
+        }
+      }
     } finally {
-      reservedRef.current = 0
+      reservedRef.current = before
     }
   }
 

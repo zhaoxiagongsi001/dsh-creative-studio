@@ -421,6 +421,24 @@ check('没有 localStorage 时写返回 false', saveGenerateSnapshot(emptyGenera
 equals('没有 localStorage 时启动态是空态', loadGenerateBootRun(1_000).kind, 'idle')
 globalThis.localStorage = savedAgain
 
+// ============================================================ 计费口径
+//
+// 错误卡片只有两种承诺：「本次未计费」与「上游可能已计费，以账单为准」。
+// 说错方向都很难看（说未计费却真扣了钱 / 明明没发出去却吓唬人），
+// 所以判定表用离线断言钉死：默认保守（可能已计费），只有明确的前置校验才敢说未计费。
+
+console.log('\n[生图：计费口径]')
+const { billingOfCode } = mod
+
+for (const code of ['timeout', 'upstream', 'aborted', 'network', 'unknown', 'bad-shape', 'generate-failed']) {
+  equals(`${code} → 可能已计费`, billingOfCode(code), 'unknown')
+}
+for (const code of ['bad-model', 'bad-prompt', 'bad-id', 'capabilities-unsupported', 'no-key', 'forbidden']) {
+  equals(`${code} → 确定未计费`, billingOfCode(code), undefined)
+}
+// 宿主将来新增 code 时默认保守：宁可多说一句「以账单为准」。
+equals('未登记的 code 默认按可能已计费', billingOfCode('some-future-code'), 'unknown')
+
 // ============================================================ 结论
 
 console.log('')

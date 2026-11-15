@@ -70,6 +70,8 @@ import {
 } from './generate/persist.ts'
 // 剪贴板解析是纯函数，放 shared/ 供客户端调、也供 node 自检断言（scripts/paste-check.mjs）。
 import { readPasteImages } from './shared/paste.ts'
+// 计费口径判定表同理：错误卡片写「本次未计费」还是「以账单为准」全靠它。
+import { billingOfCode } from './shared/billing.ts'
 
 /** 插件名。Cordis 用它做日志与去重标识。 */
 export const name = 'dsh-creative-studio'
@@ -1341,3 +1343,4 @@ export {
   saveGenerateSnapshot,
 }
 export { readPasteImages }
+export { billingOfCode }
