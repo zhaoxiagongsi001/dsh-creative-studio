@@ -258,6 +258,22 @@ export function cancelReverse(): void {
   inflight?.abort()
 }
 
+/**
+ * 清空反推运行态（换源图 / 移除源图时调，`ReversePane` 两处入口）。
+ *
+ * 结果、报错、中断标记都属于「上一张图」：图一换，它们就不再是当前这张图的答案，
+ * 留在界面上会让人误读。在飞的那次请求一并中止——它回来的是旧图的结论。
+ * 注意：这只由用户动作触发，**不是**组件卸载的副作用（卸载不动请求）。
+ */
+export function clearRun(): void {
+  const controller = inflight
+  inflight = undefined
+  controller?.abort()
+  pending = []
+  patchReverseSnapshot({ inflight: null, result: null, meta: null, error: null, pendingCards: [] })
+  emit({ kind: 'idle' })
+}
+
 /** 待消费的推荐卡片 id。 */
 export function pendingCards(): string[] {
   return pending

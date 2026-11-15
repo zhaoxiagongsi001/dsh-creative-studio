@@ -60,7 +60,7 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
-    "check": "node scripts/build.mjs && node scripts/host-check.mjs && node scripts/rules-check.mjs && node scripts/persist-check.mjs && node scripts/paste-check.mjs && node scripts/host-smoke.mjs && node scripts/render-check.mjs",
+    "check": "node scripts/typecheck.mjs && node scripts/build.mjs && node scripts/host-check.mjs && node scripts/rules-check.mjs && node scripts/persist-check.mjs && node scripts/paste-check.mjs && node scripts/host-smoke.mjs && node scripts/render-check.mjs",
     "preview": "node scripts/build.mjs && node scripts/preview.mjs"
   },
   "keywords": [

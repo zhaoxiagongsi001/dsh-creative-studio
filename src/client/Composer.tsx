@@ -792,7 +792,7 @@ export function Composer(props: ComposerProps): React.JSX.Element {
       }
       // 张数、预算、串行入队都在 addFiles 里统一处理（与文件选择框同一条路）。
       // 用 ref 取最新那版：这个监听的依赖里没有 addFiles，闭包会过期。
-      void addFilesRef.current(files)
+      void addFilesRef.current(read.files)
     }
     // 捕获阶段：抢在宿主的聊天输入框处理之前接住图片粘贴。
     window.addEventListener('paste', onPaste, true)
